@@ -1,0 +1,19 @@
+# Django core
+django~=5.1
+gunicorn
+
+# Database
+psycopg2-binary
+dj-database-url
+
+# Auth0
+authlib~=1.3
+python-dotenv~=1.0
+requests~=2.31
+
+# Static files
+whitenoise[brotli]
+
+# Forecast engine (lightweight — no GIS deps needed for site forecasts)
+numpy
+pandas
