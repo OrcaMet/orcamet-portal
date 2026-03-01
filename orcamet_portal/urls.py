@@ -1,10 +1,14 @@
-from django.urls import path
-from . import views
+"""
+OrcaMet Portal — URL Configuration
+"""
 
-app_name = "dashboard"
+from django.contrib import admin
+from django.urls import path, include
 
 urlpatterns = [
-    path("", views.home, name="home"),
-    path("site/<int:site_id>/", views.site_detail, name="site_detail"),
-    path("site/<int:site_id>/chart-data/", views.forecast_chart_data, name="chart_data"),
+    path("admin/", admin.site.urls),
+    path("", include("accounts.urls")),
+    path("dashboard/", include("dashboard.urls")),
+    path("sites/", include("sites.urls")),
+    path("forecasts/", include("forecasts.urls")),
 ]
