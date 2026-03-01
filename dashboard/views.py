@@ -194,6 +194,8 @@ def forecast_chart_data(request, site_id):
         "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
     }
 
+    hourly_list = list(hourly)
+
     data = {
         "site": {
             "name": site.name,
@@ -201,6 +203,10 @@ def forecast_chart_data(request, site_id):
             "exposure": site.get_exposure_display(),
         },
         "thresholds": thresholds,
+        "debug": {
+            "run_ids": run_ids,
+            "hourly_count": len(hourly_list),
+        },
         "hourly": [
             {
                 "time": h["timestamp"].isoformat(),
@@ -214,7 +220,7 @@ def forecast_chart_data(request, site_id):
                 "temp_spread": round(h["temp_spread"], 1),
                 "risk": round(h["hourly_risk"], 1),
             }
-            for h in hourly
+            for h in hourly_list
         ],
     }
 
