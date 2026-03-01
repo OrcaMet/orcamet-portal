@@ -245,7 +245,8 @@ def _create_weighted_ensemble(ensemble_data: dict, model_names: list) -> pd.Data
             if values is None:
                 values = [np.nan] * n_times
             values = np.array(values)
-            values = np.where(values is None, np.nan, values).astype(float)
+            values = np.array(values, dtype=float)  # None → NaN automatically
+            values = np.nan_to_num(values, nan=0.0)  # or keep NaN and handle downstream
             if len(values) == n_times:
                 ensemble_vars[var] += weight * values
                 raw_values[var].append(values)
@@ -265,3 +266,4 @@ def _create_weighted_ensemble(ensemble_data: dict, model_names: list) -> pd.Data
     })
     df.attrs["models_used"] = model_names
     return df
+
