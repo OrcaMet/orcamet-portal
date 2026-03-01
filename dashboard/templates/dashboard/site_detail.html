@@ -4,8 +4,9 @@
 {% block title %}{{ site.name }} - OrcaMet Portal{% endblock %}
 
 {% block extra_head %}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-adapter-date-fns/3.0.0/chartjs-adapter-date-fns.bundle.min.js"></script>
+<!-- Chart.js 4 + date-fns adapter — using jsdelivr as recommended by chartjs docs -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -204,43 +205,84 @@
     };
 
     var charts = {};
-
-    // Use inline data directly — no fetch() needed
     var data = CHART_DATA;
+
+    // ============================================================
+    // Detect if the date adapter loaded properly
+    // ============================================================
+    var hasDateAdapter = (
+        typeof Chart !== 'undefined' &&
+        Chart._adapters &&
+        Chart._adapters._date &&
+        typeof Chart._adapters._date.prototype.format === 'function'
+    );
 
     if (!data.hourly || data.hourly.length === 0) {
         document.getElementById('hourly-tbody').innerHTML =
-            '<tr><td colspan="6" class="loading-cell">No hourly data available. (debug: run_ids=' +
-            JSON.stringify(data.debug ? data.debug.run_ids : []) +
+            '<tr><td colspan="6" class="loading-cell">No hourly data available. ' +
+            '(debug: run_ids=' + JSON.stringify(data.debug ? data.debug.run_ids : []) +
             ', count=' + (data.debug ? data.debug.hourly_count : 'n/a') + ')</td></tr>';
     } else {
-        var labels = data.hourly.map(function(h) { return new Date(h.time); });
         var thresholds = data.thresholds;
-        buildRiskChart(labels, data.hourly);
-        buildWindChart(labels, data.hourly, thresholds);
-        buildPrecipChart(labels, data.hourly, thresholds);
-        buildTempChart(labels, data.hourly, thresholds);
+
+        if (hasDateAdapter) {
+            // Full time-axis mode (date adapter loaded)
+            var labels = data.hourly.map(function(h) { return new Date(h.time); });
+            buildRiskChart(labels, data.hourly, true);
+            buildWindChart(labels, data.hourly, thresholds, true);
+            buildPrecipChart(labels, data.hourly, thresholds, true);
+            buildTempChart(labels, data.hourly, thresholds, true);
+        } else {
+            // Fallback: category labels (no date adapter)
+            console.warn('OrcaMet: date adapter not available, using category labels');
+            var labels = data.hourly.map(function(h) {
+                var d = new Date(h.time);
+                var day = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+                var time = String(d.getUTCHours()).padStart(2, '0') + ':00';
+                return day + ' ' + time;
+            });
+            buildRiskChart(labels, data.hourly, false);
+            buildWindChart(labels, data.hourly, thresholds, false);
+            buildPrecipChart(labels, data.hourly, thresholds, false);
+            buildTempChart(labels, data.hourly, thresholds, false);
+        }
+
         buildTable(data.hourly);
     }
 
-    function commonScales(yLabel) {
-        return {
-            x: {
+    // ============================================================
+    // X-axis config — adapts based on whether date adapter is present
+    // ============================================================
+    function xScale(useTime) {
+        if (useTime) {
+            return {
                 type: 'time',
                 time: { unit: 'hour', displayFormats: { hour: 'HH:mm' }, tooltipFormat: 'EEE dd MMM HH:mm' },
                 grid: { color: COLOURS.grid },
-                ticks: { color: COLOURS.text, maxRotation: 0, autoSkipPadding: 20 }
-            },
-            y: {
-                title: { display: true, text: yLabel, color: COLOURS.text },
-                grid: { color: COLOURS.grid },
-                ticks: { color: COLOURS.text },
-                beginAtZero: true
-            }
+                ticks: { color: COLOURS.text, maxRotation: 45, autoSkipPadding: 20 }
+            };
+        }
+        return {
+            type: 'category',
+            grid: { color: COLOURS.grid },
+            ticks: { color: COLOURS.text, maxRotation: 45, autoSkip: true, autoSkipPadding: 15, maxTicksLimit: 24 }
         };
     }
 
-    function buildRiskChart(labels, hourly) {
+    function yScale(yLabel, extraOpts) {
+        var s = {
+            title: { display: true, text: yLabel, color: COLOURS.text },
+            grid: { color: COLOURS.grid },
+            ticks: { color: COLOURS.text },
+            beginAtZero: true
+        };
+        if (extraOpts) {
+            for (var k in extraOpts) { s[k] = extraOpts[k]; }
+        }
+        return s;
+    }
+
+    function buildRiskChart(labels, hourly, useTime) {
         var ctx = document.getElementById('chart-risk').getContext('2d');
         charts.risk = new Chart(ctx, {
             type: 'line',
@@ -257,12 +299,12 @@
             options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
-                scales: { x: commonScales('Risk (%)').x, y: { title: { display: true, text: 'Risk (%)', color: COLOURS.text }, grid: { color: COLOURS.grid }, ticks: { color: COLOURS.text }, beginAtZero: true, max: 100 } }
+                scales: { x: xScale(useTime), y: yScale('Risk (%)', { max: 100 }) }
             }
         });
     }
 
-    function buildWindChart(labels, hourly, thresholds) {
+    function buildWindChart(labels, hourly, thresholds, useTime) {
         var ctx = document.getElementById('chart-wind').getContext('2d');
         charts.wind = new Chart(ctx, {
             type: 'line',
@@ -279,12 +321,12 @@
             options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
-                scales: commonScales('Speed (m/s)')
+                scales: { x: xScale(useTime), y: yScale('Speed (m/s)') }
             }
         });
     }
 
-    function buildPrecipChart(labels, hourly, thresholds) {
+    function buildPrecipChart(labels, hourly, thresholds, useTime) {
         var ctx = document.getElementById('chart-precip').getContext('2d');
         charts.precip = new Chart(ctx, {
             type: 'bar',
@@ -304,19 +346,19 @@
             options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
-                scales: commonScales('Precipitation (mm/h)')
+                scales: { x: xScale(useTime), y: yScale('Precipitation (mm/h)') }
             }
         });
     }
 
-    function buildTempChart(labels, hourly, thresholds) {
+    function buildTempChart(labels, hourly, thresholds, useTime) {
         var ctx = document.getElementById('chart-temp').getContext('2d');
         charts.temp = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: labels,
                 datasets: [
-                    { label: 'Temperature (C)', data: hourly.map(function(h) { return h.temperature; }), borderColor: COLOURS.temp.line, backgroundColor: COLOURS.temp.fill, fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 8, borderWidth: 2 },
+                    { label: 'Temperature (°C)', data: hourly.map(function(h) { return h.temperature; }), borderColor: COLOURS.temp.line, backgroundColor: COLOURS.temp.fill, fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 8, borderWidth: 2 },
                     { label: 'Temp Caution', data: hourly.map(function() { return thresholds.temp_min_caution; }), borderColor: COLOURS.cautionLine, borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false },
                     { label: 'Temp Cancel', data: hourly.map(function() { return thresholds.temp_min_cancel; }), borderColor: COLOURS.cancelLine, borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false }
                 ]
@@ -324,7 +366,7 @@
             options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
-                scales: { x: commonScales('Temperature (C)').x, y: { title: { display: true, text: 'Temperature (C)', color: COLOURS.text }, grid: { color: COLOURS.grid }, ticks: { color: COLOURS.text } } }
+                scales: { x: xScale(useTime), y: yScale('Temperature (°C)', { beginAtZero: false }) }
             }
         });
     }
@@ -354,6 +396,9 @@
         tbody.innerHTML = html;
     }
 
+    // ============================================================
+    // Tab switching
+    // ============================================================
     var tabs = document.querySelectorAll('.chart-tab');
     for (var t = 0; t < tabs.length; t++) {
         tabs[t].addEventListener('click', function() {
