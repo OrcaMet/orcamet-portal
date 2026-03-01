@@ -29,21 +29,13 @@
         <div class="site-header-status">
             {% with run=forecast_days.0 %}
             {% if run.recommendation == "GO" %}
-            <div class="status-badge status-go">
-                <span class="status-text">GO</span>
-            </div>
+            <div class="status-badge status-go"><span class="status-text">GO</span></div>
             {% elif run.recommendation == "CAUTION" %}
-            <div class="status-badge status-caution">
-                <span class="status-text">CAUTION</span>
-            </div>
+            <div class="status-badge status-caution"><span class="status-text">CAUTION</span></div>
             {% elif run.recommendation == "CANCEL" %}
-            <div class="status-badge status-cancel">
-                <span class="status-text">CANCEL</span>
-            </div>
+            <div class="status-badge status-cancel"><span class="status-text">CANCEL</span></div>
             {% endif %}
-            <div class="status-detail">
-                Peak risk: {{ run.peak_risk|floatformat:0 }}% &middot; Updated {{ run.generated_at|date:"H:i d M" }} UTC
-            </div>
+            <div class="status-detail">Peak risk: {{ run.peak_risk|floatformat:0 }}% &middot; Updated {{ run.generated_at|date:"H:i d M" }} UTC</div>
             {% endwith %}
         </div>
         {% endif %}
@@ -62,10 +54,7 @@
                 {% endif %}
                 <span class="day-full-date">{{ run.forecast_date|date:"d M Y" }}</span>
             </div>
-            <div class="day-card-recommendation">
-                {% if run.recommendation == "GO" %}&#x1F7E2;{% elif run.recommendation == "CAUTION" %}&#x1F7E1;{% else %}&#x1F534;{% endif %}
-                {{ run.recommendation }}
-            </div>
+            <div class="day-card-recommendation">{{ run.recommendation }}</div>
             <div class="day-card-stats">
                 <div class="day-stat">
                     <span class="day-stat-label">Peak Risk</span>
@@ -88,9 +77,7 @@
                     <span class="day-stat-value">{{ run.min_temp|floatformat:1 }}&deg;C</span>
                 </div>
             </div>
-            <div class="day-card-models">
-                Models: {{ run.models_used|join:", " }}
-            </div>
+            <div class="day-card-models">Models: {{ run.models_used|join:", " }}</div>
         </div>
         {% endfor %}
     </div>
@@ -145,29 +132,29 @@
             <div class="threshold-item">
                 <span class="threshold-var">Mean Wind</span>
                 <span class="threshold-vals">
-                    <span class="threshold-caution">&#x26A0; {{ threshold.wind_mean_caution }} m/s</span>
-                    <span class="threshold-cancel">&#x1F6D1; {{ threshold.wind_mean_cancel }} m/s</span>
+                    <span class="threshold-caution">Caution: {{ threshold.wind_mean_caution }} m/s</span>
+                    <span class="threshold-cancel">Cancel: {{ threshold.wind_mean_cancel }} m/s</span>
                 </span>
             </div>
             <div class="threshold-item">
                 <span class="threshold-var">Gusts</span>
                 <span class="threshold-vals">
-                    <span class="threshold-caution">&#x26A0; {{ threshold.gust_caution }} m/s</span>
-                    <span class="threshold-cancel">&#x1F6D1; {{ threshold.gust_cancel }} m/s</span>
+                    <span class="threshold-caution">Caution: {{ threshold.gust_caution }} m/s</span>
+                    <span class="threshold-cancel">Cancel: {{ threshold.gust_cancel }} m/s</span>
                 </span>
             </div>
             <div class="threshold-item">
                 <span class="threshold-var">Precipitation</span>
                 <span class="threshold-vals">
-                    <span class="threshold-caution">&#x26A0; {{ threshold.precip_caution }} mm/h</span>
-                    <span class="threshold-cancel">&#x1F6D1; {{ threshold.precip_cancel }} mm/h</span>
+                    <span class="threshold-caution">Caution: {{ threshold.precip_caution }} mm/h</span>
+                    <span class="threshold-cancel">Cancel: {{ threshold.precip_cancel }} mm/h</span>
                 </span>
             </div>
             <div class="threshold-item">
                 <span class="threshold-var">Min Temperature</span>
                 <span class="threshold-vals">
-                    <span class="threshold-caution">&#x26A0; {{ threshold.temp_min_caution }}&deg;C</span>
-                    <span class="threshold-cancel">&#x1F6D1; {{ threshold.temp_min_cancel }}&deg;C</span>
+                    <span class="threshold-caution">Caution: {{ threshold.temp_min_caution }}&deg;C</span>
+                    <span class="threshold-cancel">Cancel: {{ threshold.temp_min_cancel }}&deg;C</span>
                 </span>
             </div>
         </div>
@@ -196,7 +183,7 @@
 {% if forecast_days %}
 <script>
 (function() {
-    var API_URL = '{% url "dashboard:chart_data" site.pk %}';
+    var API_URL = "{% url 'dashboard:chart_data' site.pk %}";
     var WORK_START = 7;
     var WORK_END = 18;
 
@@ -225,10 +212,8 @@
                     '<tr><td colspan="6" class="loading-cell">No hourly data available.</td></tr>';
                 return;
             }
-
             var labels = data.hourly.map(function(h) { return new Date(h.time); });
             var thresholds = data.thresholds;
-
             buildRiskChart(labels, data.hourly);
             buildWindChart(labels, data.hourly, thresholds);
             buildPrecipChart(labels, data.hourly, thresholds);
@@ -236,20 +221,16 @@
             buildTable(data.hourly);
         })
         .catch(function(err) {
-            console.error('Failed to load forecast data:', err);
+            console.error('Forecast data error:', err);
             document.getElementById('hourly-tbody').innerHTML =
-                '<tr><td colspan="6" class="loading-cell">Failed to load forecast data. Check browser console for details.</td></tr>';
+                '<tr><td colspan="6" class="loading-cell">Failed to load forecast data.</td></tr>';
         });
 
     function commonScales(yLabel) {
         return {
             x: {
                 type: 'time',
-                time: {
-                    unit: 'hour',
-                    displayFormats: { hour: 'HH:mm' },
-                    tooltipFormat: 'EEE dd MMM HH:mm'
-                },
+                time: { unit: 'hour', displayFormats: { hour: 'HH:mm' }, tooltipFormat: 'EEE dd MMM HH:mm' },
                 grid: { color: COLOURS.grid },
                 ticks: { color: COLOURS.text, maxRotation: 0, autoSkipPadding: 20 }
             },
@@ -273,30 +254,13 @@
                     data: hourly.map(function(h) { return h.risk; }),
                     borderColor: COLOURS.risk.line,
                     backgroundColor: COLOURS.risk.fill,
-                    fill: true,
-                    tension: 0.3,
-                    pointRadius: 0,
-                    pointHitRadius: 8,
-                    borderWidth: 2
+                    fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 8, borderWidth: 2
                 }]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { labels: { color: COLOURS.text } },
-                    tooltip: { mode: 'index', intersect: false }
-                },
-                scales: {
-                    x: commonScales('Risk (%)').x,
-                    y: {
-                        title: { display: true, text: 'Risk (%)', color: COLOURS.text },
-                        grid: { color: COLOURS.grid },
-                        ticks: { color: COLOURS.text },
-                        beginAtZero: true,
-                        max: 100
-                    }
-                }
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
+                scales: { x: commonScales('Risk (%)').x, y: { title: { display: true, text: 'Risk (%)', color: COLOURS.text }, grid: { color: COLOURS.grid }, ticks: { color: COLOURS.text }, beginAtZero: true, max: 100 } }
             }
         });
     }
@@ -308,48 +272,16 @@
             data: {
                 labels: labels,
                 datasets: [
-                    {
-                        label: 'Wind Speed (m/s)',
-                        data: hourly.map(function(h) { return h.wind_speed; }),
-                        borderColor: COLOURS.wind.line,
-                        backgroundColor: COLOURS.wind.fill,
-                        fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 8, borderWidth: 2
-                    },
-                    {
-                        label: 'Gusts (m/s)',
-                        data: hourly.map(function(h) { return h.wind_gusts; }),
-                        borderColor: COLOURS.gust.line,
-                        backgroundColor: COLOURS.gust.fill,
-                        fill: false, tension: 0.3, pointRadius: 0, pointHitRadius: 8,
-                        borderWidth: 2, borderDash: [4, 2]
-                    },
-                    {
-                        label: 'Wind Caution (' + thresholds.wind_mean_caution + ' m/s)',
-                        data: hourly.map(function() { return thresholds.wind_mean_caution; }),
-                        borderColor: COLOURS.cautionLine, borderWidth: 1, borderDash: [6, 4],
-                        pointRadius: 0, fill: false
-                    },
-                    {
-                        label: 'Wind Cancel (' + thresholds.wind_mean_cancel + ' m/s)',
-                        data: hourly.map(function() { return thresholds.wind_mean_cancel; }),
-                        borderColor: COLOURS.cancelLine, borderWidth: 1, borderDash: [6, 4],
-                        pointRadius: 0, fill: false
-                    },
-                    {
-                        label: 'Gust Cancel (' + thresholds.gust_cancel + ' m/s)',
-                        data: hourly.map(function() { return thresholds.gust_cancel; }),
-                        borderColor: 'rgba(239,68,68,0.3)', borderWidth: 1, borderDash: [2, 4],
-                        pointRadius: 0, fill: false
-                    }
+                    { label: 'Wind Speed (m/s)', data: hourly.map(function(h) { return h.wind_speed; }), borderColor: COLOURS.wind.line, backgroundColor: COLOURS.wind.fill, fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 8, borderWidth: 2 },
+                    { label: 'Gusts (m/s)', data: hourly.map(function(h) { return h.wind_gusts; }), borderColor: COLOURS.gust.line, fill: false, tension: 0.3, pointRadius: 0, pointHitRadius: 8, borderWidth: 2, borderDash: [4, 2] },
+                    { label: 'Wind Caution', data: hourly.map(function() { return thresholds.wind_mean_caution; }), borderColor: COLOURS.cautionLine, borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false },
+                    { label: 'Wind Cancel', data: hourly.map(function() { return thresholds.wind_mean_cancel; }), borderColor: COLOURS.cancelLine, borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false },
+                    { label: 'Gust Cancel', data: hourly.map(function() { return thresholds.gust_cancel; }), borderColor: 'rgba(239,68,68,0.3)', borderWidth: 1, borderDash: [2, 4], pointRadius: 0, fill: false }
                 ]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { labels: { color: COLOURS.text } },
-                    tooltip: { mode: 'index', intersect: false }
-                },
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
                 scales: commonScales('Speed (m/s)')
             }
         });
@@ -357,11 +289,6 @@
 
     function buildPrecipChart(labels, hourly, thresholds) {
         var ctx = document.getElementById('chart-precip').getContext('2d');
-        var barColors = hourly.map(function(h) {
-            if (h.precipitation >= thresholds.precip_cancel) return 'rgba(239,68,68,0.7)';
-            if (h.precipitation >= thresholds.precip_caution) return 'rgba(245,158,11,0.7)';
-            return 'rgba(59,130,246,0.7)';
-        });
         charts.precip = new Chart(ctx, {
             type: 'bar',
             data: {
@@ -369,17 +296,17 @@
                 datasets: [{
                     label: 'Precipitation (mm/h)',
                     data: hourly.map(function(h) { return h.precipitation; }),
-                    backgroundColor: barColors,
+                    backgroundColor: hourly.map(function(h) {
+                        if (h.precipitation >= thresholds.precip_cancel) return 'rgba(239,68,68,0.7)';
+                        if (h.precipitation >= thresholds.precip_caution) return 'rgba(245,158,11,0.7)';
+                        return 'rgba(59,130,246,0.7)';
+                    }),
                     borderRadius: 2
                 }]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { labels: { color: COLOURS.text } },
-                    tooltip: { mode: 'index', intersect: false }
-                },
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
                 scales: commonScales('Precipitation (mm/h)')
             }
         });
@@ -392,42 +319,15 @@
             data: {
                 labels: labels,
                 datasets: [
-                    {
-                        label: 'Temperature (C)',
-                        data: hourly.map(function(h) { return h.temperature; }),
-                        borderColor: COLOURS.temp.line,
-                        backgroundColor: COLOURS.temp.fill,
-                        fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 8, borderWidth: 2
-                    },
-                    {
-                        label: 'Temp Caution (' + thresholds.temp_min_caution + 'C)',
-                        data: hourly.map(function() { return thresholds.temp_min_caution; }),
-                        borderColor: COLOURS.cautionLine, borderWidth: 1, borderDash: [6, 4],
-                        pointRadius: 0, fill: false
-                    },
-                    {
-                        label: 'Temp Cancel (' + thresholds.temp_min_cancel + 'C)',
-                        data: hourly.map(function() { return thresholds.temp_min_cancel; }),
-                        borderColor: COLOURS.cancelLine, borderWidth: 1, borderDash: [6, 4],
-                        pointRadius: 0, fill: false
-                    }
+                    { label: 'Temperature (C)', data: hourly.map(function(h) { return h.temperature; }), borderColor: COLOURS.temp.line, backgroundColor: COLOURS.temp.fill, fill: true, tension: 0.3, pointRadius: 0, pointHitRadius: 8, borderWidth: 2 },
+                    { label: 'Temp Caution', data: hourly.map(function() { return thresholds.temp_min_caution; }), borderColor: COLOURS.cautionLine, borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false },
+                    { label: 'Temp Cancel', data: hourly.map(function() { return thresholds.temp_min_cancel; }), borderColor: COLOURS.cancelLine, borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false }
                 ]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { labels: { color: COLOURS.text } },
-                    tooltip: { mode: 'index', intersect: false }
-                },
-                scales: {
-                    x: commonScales('Temperature (C)').x,
-                    y: {
-                        title: { display: true, text: 'Temperature (C)', color: COLOURS.text },
-                        grid: { color: COLOURS.grid },
-                        ticks: { color: COLOURS.text }
-                    }
-                }
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
+                scales: { x: commonScales('Temperature (C)').x, y: { title: { display: true, text: 'Temperature (C)', color: COLOURS.text }, grid: { color: COLOURS.grid }, ticks: { color: COLOURS.text } } }
             }
         });
     }
@@ -435,54 +335,40 @@
     function buildTable(hourly) {
         var tbody = document.getElementById('hourly-tbody');
         var html = '';
-        var i, h, d, hour, isWork, dayStr, timeStr, riskClass;
-
-        for (i = 0; i < hourly.length; i++) {
-            h = hourly[i];
-            d = new Date(h.time);
-            hour = d.getUTCHours();
-            isWork = (hour >= WORK_START && hour <= WORK_END);
-            dayStr = d.toLocaleDateString('en-GB', {
-                weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC'
-            });
-            timeStr = String(hour).padStart(2, '0') + ':00';
-
-            riskClass = 'risk-cell-low';
+        for (var i = 0; i < hourly.length; i++) {
+            var h = hourly[i];
+            var d = new Date(h.time);
+            var hour = d.getUTCHours();
+            var isWork = (hour >= WORK_START && hour <= WORK_END);
+            var dayStr = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
+            var timeStr = String(hour).padStart(2, '0') + ':00';
+            var riskClass = 'risk-cell-low';
             if (h.risk >= 50) riskClass = 'risk-cell-high';
             else if (h.risk >= 20) riskClass = 'risk-cell-medium';
-
             html += '<tr class="' + (isWork ? 'work-hour' : 'off-hour') + '">';
             html += '<td>' + dayStr + ' ' + timeStr + '</td>';
-            html += '<td>' + h.wind_speed.toFixed(1) + ' <span class="spread">+/-' + h.wind_spread.toFixed(1) + '</span></td>';
-            html += '<td>' + h.wind_gusts.toFixed(1) + ' <span class="spread">+/-' + h.gust_spread.toFixed(1) + '</span></td>';
+            html += '<td>' + h.wind_speed.toFixed(1) + '</td>';
+            html += '<td>' + h.wind_gusts.toFixed(1) + '</td>';
             html += '<td>' + h.precipitation.toFixed(1) + '</td>';
             html += '<td>' + h.temperature.toFixed(1) + '</td>';
             html += '<td class="' + riskClass + '">' + h.risk.toFixed(0) + '%</td>';
             html += '</tr>';
         }
-
         tbody.innerHTML = html;
     }
 
     var tabs = document.querySelectorAll('.chart-tab');
     for (var t = 0; t < tabs.length; t++) {
         tabs[t].addEventListener('click', function() {
-            for (var j = 0; j < tabs.length; j++) {
-                tabs[j].classList.remove('active');
-            }
+            for (var j = 0; j < tabs.length; j++) { tabs[j].classList.remove('active'); }
             this.classList.add('active');
-
             var chartName = this.getAttribute('data-chart');
             var containers = document.querySelectorAll('.chart-container');
-            for (var c = 0; c < containers.length; c++) {
-                containers[c].style.display = 'none';
-            }
+            for (var c = 0; c < containers.length; c++) { containers[c].style.display = 'none'; }
             document.getElementById('chart-' + chartName + '-container').style.display = 'block';
-
             if (charts[chartName]) charts[chartName].resize();
         });
     }
-
 })();
 </script>
 {% endif %}
