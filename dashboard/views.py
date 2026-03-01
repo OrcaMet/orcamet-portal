@@ -5,6 +5,7 @@ Main views for logged-in users: dashboard overview and site detail with
 live forecast data, charts, and risk assessments.
 """
 
+import json
 from datetime import date, timedelta
 
 from django.contrib.auth.decorators import login_required
@@ -58,6 +59,77 @@ def _annotate_sites_with_forecasts(sites_qs):
     return annotated
 
 
+def _build_chart_data(site, forecast_days):
+    """
+    Build the hourly chart data as a Python dict, ready to be serialised
+    into the template as inline JSON. This eliminates the need for a
+    separate AJAX fetch() call.
+    """
+    from sites.models import ThresholdProfile
+
+    if not forecast_days:
+        return json.dumps({"hourly": [], "thresholds": {}})
+
+    run_ids = [run.pk for run in forecast_days]
+
+    hourly_qs = (
+        HourlyForecast.objects.filter(run_id__in=run_ids)
+        .order_by("timestamp")
+        .values(
+            "timestamp",
+            "wind_speed",
+            "wind_gusts",
+            "precipitation",
+            "temperature",
+            "wind_spread",
+            "gust_spread",
+            "precip_spread",
+            "temp_spread",
+            "hourly_risk",
+        )
+    )
+
+    threshold = ThresholdProfile.objects.filter(site=site, is_active=True).first()
+    thresholds = threshold.as_dict() if threshold else {
+        "wind_mean_caution": 10.0, "wind_mean_cancel": 14.0,
+        "gust_caution": 15.0, "gust_cancel": 20.0,
+        "precip_caution": 0.7, "precip_cancel": 2.0,
+        "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
+    }
+
+    hourly_list = [
+        {
+            "time": h["timestamp"].isoformat(),
+            "wind_speed": round(h["wind_speed"], 1),
+            "wind_gusts": round(h["wind_gusts"], 1),
+            "precipitation": round(h["precipitation"], 1),
+            "temperature": round(h["temperature"], 1),
+            "wind_spread": round(h["wind_spread"], 1),
+            "gust_spread": round(h["gust_spread"], 1),
+            "precip_spread": round(h["precip_spread"], 1),
+            "temp_spread": round(h["temp_spread"], 1),
+            "risk": round(h["hourly_risk"], 1),
+        }
+        for h in hourly_qs
+    ]
+
+    data = {
+        "site": {
+            "name": site.name,
+            "postcode": site.postcode,
+            "exposure": site.get_exposure_display(),
+        },
+        "thresholds": thresholds,
+        "hourly": hourly_list,
+        "debug": {
+            "run_ids": run_ids,
+            "hourly_count": len(hourly_list),
+        },
+    }
+
+    return json.dumps(data)
+
+
 @login_required(login_url="/login/")
 def home(request):
     """
@@ -97,6 +169,7 @@ def home(request):
 def site_detail(request, site_id):
     """
     Site detail view with full forecast display.
+    Hourly data is embedded as inline JSON — no separate AJAX call needed.
     """
     user = request.user
 
@@ -126,12 +199,16 @@ def site_detail(request, site_id):
     from sites.models import ThresholdProfile
     threshold = ThresholdProfile.objects.filter(site=site, is_active=True).first()
 
+    # Build hourly data as inline JSON — embedded in the page, no AJAX needed
+    chart_data_json = _build_chart_data(site, forecast_days)
+
     context = {
         "user": user,
         "site": site,
         "forecast_days": forecast_days,
         "threshold": threshold,
         "today": today,
+        "chart_data_json": chart_data_json,
     }
 
     return render(request, "dashboard/site_detail.html", context)
@@ -140,7 +217,8 @@ def site_detail(request, site_id):
 @login_required(login_url="/login/")
 def forecast_chart_data(request, site_id):
     """
-    JSON API endpoint for Chart.js.
+    JSON API endpoint — kept as a debug tool.
+    Visit /dashboard/site/<id>/chart-data/ to inspect raw data.
     """
     user = request.user
 
