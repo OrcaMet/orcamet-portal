@@ -28,7 +28,7 @@ def _get_user_sites(user):
 
 
 def _latest_run_for_site(site):
-    """Return the most recent successful ForecastRun for a site (today or most recent)."""
+    """Return the most recent successful ForecastRun for a site."""
     return (
         ForecastRun.objects.filter(site=site, status=ForecastRun.Status.SUCCESS)
         .order_by("-forecast_date", "-generated_at")
@@ -42,7 +42,6 @@ def _annotate_sites_with_forecasts(sites_qs):
     today = date.today()
 
     for site in sites_qs:
-        # Get today's forecast first, fall back to most recent
         run = (
             ForecastRun.objects.filter(
                 site=site, status=ForecastRun.Status.SUCCESS, forecast_date=today
@@ -63,15 +62,11 @@ def _annotate_sites_with_forecasts(sites_qs):
 def home(request):
     """
     Main dashboard view with live forecast data.
-
-    Superadmins see all sites.
-    Client users see only their client's sites.
     """
     user = request.user
     sites_qs = _get_user_sites(user)
     sites_list = _annotate_sites_with_forecasts(sites_qs)
 
-    # Summary stats
     total_sites = len(sites_list)
     sites_with_forecasts = sum(1 for s in sites_list if s.latest_run)
     alerts = sum(
@@ -80,7 +75,6 @@ def home(request):
         if s.latest_run and s.latest_run.recommendation in ("CAUTION", "CANCEL")
     )
 
-    # Latest forecast timestamp
     latest_ts = None
     for s in sites_list:
         if s.latest_run:
@@ -103,12 +97,9 @@ def home(request):
 def site_detail(request, site_id):
     """
     Site detail view with full forecast display.
-    Shows multi-day forecasts with interactive Chart.js charts,
-    hourly data tables, and risk assessments.
     """
     user = request.user
 
-    # Access control
     if user.is_superadmin:
         site = get_object_or_404(Site, pk=site_id, is_active=True)
     elif user.client:
@@ -118,7 +109,6 @@ def site_detail(request, site_id):
     else:
         return render(request, "dashboard/no_access.html", status=403)
 
-    # Get forecast runs for the next 3 days
     today = date.today()
     runs = ForecastRun.objects.filter(
         site=site,
@@ -126,7 +116,6 @@ def site_detail(request, site_id):
         forecast_date__gte=today,
     ).order_by("forecast_date", "-generated_at")
 
-    # Deduplicate: keep only the latest run per forecast_date
     seen_dates = set()
     forecast_days = []
     for run in runs:
@@ -134,27 +123,13 @@ def site_detail(request, site_id):
             seen_dates.add(run.forecast_date)
             forecast_days.append(run)
 
-    # Also include yesterday for context
-    yesterday_run = (
-        ForecastRun.objects.filter(
-            site=site,
-            status=ForecastRun.Status.SUCCESS,
-            forecast_date=today - timedelta(days=1),
-        )
-        .order_by("-generated_at")
-        .first()
-    )
-
-    # Get threshold profile
     from sites.models import ThresholdProfile
-
     threshold = ThresholdProfile.objects.filter(site=site, is_active=True).first()
 
     context = {
         "user": user,
         "site": site,
         "forecast_days": forecast_days,
-        "yesterday_run": yesterday_run,
         "threshold": threshold,
         "today": today,
     }
@@ -165,8 +140,7 @@ def site_detail(request, site_id):
 @login_required(login_url="/login/")
 def forecast_chart_data(request, site_id):
     """
-    JSON API endpoint for Chart.js — returns hourly forecast data
-    for a site across all available forecast days.
+    JSON API endpoint for Chart.js.
     """
     user = request.user
 
@@ -181,14 +155,12 @@ def forecast_chart_data(request, site_id):
 
     today = date.today()
 
-    # Get all successful runs from yesterday onwards
     runs = ForecastRun.objects.filter(
         site=site,
         status=ForecastRun.Status.SUCCESS,
         forecast_date__gte=today - timedelta(days=1),
     ).order_by("forecast_date", "-generated_at")
 
-    # Deduplicate per date
     seen = set()
     run_ids = []
     for run in runs:
@@ -196,7 +168,6 @@ def forecast_chart_data(request, site_id):
             seen.add(run.forecast_date)
             run_ids.append(run.pk)
 
-    # Fetch all hourly data for these runs
     hourly = (
         HourlyForecast.objects.filter(run_id__in=run_ids)
         .order_by("timestamp")
@@ -214,19 +185,13 @@ def forecast_chart_data(request, site_id):
         )
     )
 
-    # Get thresholds
     from sites.models import ThresholdProfile
-
     threshold = ThresholdProfile.objects.filter(site=site, is_active=True).first()
     thresholds = threshold.as_dict() if threshold else {
-        "wind_mean_caution": 10.0,
-        "wind_mean_cancel": 14.0,
-        "gust_caution": 15.0,
-        "gust_cancel": 20.0,
-        "precip_caution": 0.7,
-        "precip_cancel": 2.0,
-        "temp_min_caution": 1.0,
-        "temp_min_cancel": -2.0,
+        "wind_mean_caution": 10.0, "wind_mean_cancel": 14.0,
+        "gust_caution": 15.0, "gust_cancel": 20.0,
+        "precip_caution": 0.7, "precip_cancel": 2.0,
+        "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
     }
 
     data = {
