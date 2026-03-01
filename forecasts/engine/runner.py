@@ -119,11 +119,18 @@ def run_forecast_for_site(site: Site) -> list:
         if work_hours.empty:
             continue
 
-        peak_risk = float(work_hours["hourly_risk"].max())
-        peak_wind = float(work_hours["wind_speed"].max())
-        peak_gust = float(work_hours["wind_gusts"].max())
-        peak_precip = float(work_hours["precipitation"].max())
-        min_temp = float(work_hours["temperature"].min())
+        # Sanitise summary stats — replace NaN/inf with 0.0
+        def safe_stat(val, default=0.0):
+            v = float(val)
+            if np.isnan(v) or np.isinf(v):
+                return default
+            return v
+
+        peak_risk = safe_stat(work_hours["hourly_risk"].max())
+        peak_wind = safe_stat(work_hours["wind_speed"].max())
+        peak_gust = safe_stat(work_hours["wind_gusts"].max())
+        peak_precip = safe_stat(work_hours["precipitation"].max())
+        min_temp = safe_stat(work_hours["temperature"].min())
         recommendation = get_recommendation(peak_risk)
 
         # Delete any existing runs for this site+date (replace with fresh)
@@ -149,21 +156,38 @@ def run_forecast_for_site(site: Site) -> list:
         # Store all hourly data (full 24h, not just work hours)
         hourly_records = []
         for _, row in day_data.iterrows():
+            # Sanitise any NaN/inf values — PostgreSQL rejects them
+            def safe_float(val, default=0.0):
+                v = float(val)
+                if np.isnan(v) or np.isinf(v):
+                    return default
+                return v
+
             hourly_records.append(HourlyForecast(
                 run=run,
                 timestamp=row["time"],
-                wind_speed=float(row["wind_speed"]),
-                wind_gusts=float(row["wind_gusts"]),
-                precipitation=float(row["precipitation"]),
-                temperature=float(row["temperature"]),
-                wind_spread=float(row.get("wind_speed_spread", 0)),
-                gust_spread=float(row.get("wind_gusts_spread", 0)),
-                precip_spread=float(row.get("precipitation_spread", 0)),
-                temp_spread=float(row.get("temperature_spread", 0)),
-                hourly_risk=float(row["hourly_risk"]),
+                wind_speed=safe_float(row["wind_speed"]),
+                wind_gusts=safe_float(row["wind_gusts"]),
+                precipitation=safe_float(row["precipitation"]),
+                temperature=safe_float(row["temperature"]),
+                wind_spread=safe_float(row.get("wind_speed_spread", 0)),
+                gust_spread=safe_float(row.get("wind_gusts_spread", 0)),
+                precip_spread=safe_float(row.get("precipitation_spread", 0)),
+                temp_spread=safe_float(row.get("temperature_spread", 0)),
+                hourly_risk=safe_float(row["hourly_risk"]),
             ))
 
-        HourlyForecast.objects.bulk_create(hourly_records)
+        try:
+            HourlyForecast.objects.bulk_create(hourly_records)
+        except Exception as e:
+            logger.error(
+                f"  ✗ Failed to store hourly data for {forecast_date}: {e}"
+            )
+            run.status = ForecastRun.Status.FAILED
+            run.error_message = f"Hourly data storage failed: {e}"
+            run.save()
+            runs.append(run)
+            continue
 
         logger.info(
             f"  ✓ {forecast_date}: peak risk {peak_risk:.1f}% "
