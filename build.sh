@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# OrcaMet Portal — Render Build Script
-# Runs on every deploy
-
 set -o errexit
 
 echo "=== Installing dependencies ==="
-pip install -r requirements.txt
+pip install --no-cache-dir -r requirements.txt
 
 echo "=== Collecting static files ==="
-python manage.py collectstatic --no-input
+python manage.py collectstatic --no-input --verbosity 2
 
 echo "=== Running database migrations ==="
-python manage.py migrate
+python manage.py migrate --verbosity 2
+
+echo "=== Checking templates ==="
+python manage.py check --deploy
 
 echo "=== Build complete ==="
