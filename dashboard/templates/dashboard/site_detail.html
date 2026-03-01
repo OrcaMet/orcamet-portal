@@ -1,15 +1,15 @@
-{% extends "orcamet_portal/base.html" %} {% load static %} {% block title %}{{ site.name }} — OrcaMet Portal{% endblock %} {% block extra_head %} {% endblock %} {% block content %}
+{% extends "orcamet_portal/base.html" %} {% load static %} {% block title %}{{ site.name }} - OrcaMet Portal{% endblock %} {% block extra_head %} {% endblock %} {% block content %}
 Dashboard › {{ site.name }}
 {{ site.name }}
 {{ site.client.name }} · {{ site.postcode }} · {{ site.get_exposure_display }} {% if site.elevation %} · {{ site.elevation }}m ASL{% endif %}
 
 {% if forecast_days %}
 {% with run=forecast_days.0 %} {% if run.recommendation == "GO" %}
-🟢 GO
+GO
 {% elif run.recommendation == "CAUTION" %}
-🟡 CAUTION
+CAUTION
 {% elif run.recommendation == "CANCEL" %}
-🔴 CANCEL
+CANCEL
 {% endif %}
 Peak risk: {{ run.peak_risk|floatformat:0 }}% · Updated {{ run.generated_at|date:"H:i d M" }} UTC
 {% endwith %}
@@ -27,18 +27,18 @@ Models: {{ run.models_used|join:", " }}
 {% endfor %}
 Hourly Forecast
 Risk Score Wind & Gusts Precipitation Temperature
-Hourly Breakdown (Work hours 07:00–18:00 highlighted)
+Hourly Breakdown (Work hours 07:00-18:00 highlighted)
 Time (UTC)	Wind (m/s)	Gust (m/s)	Precip (mm/h)	Temp (°C)	Risk
-Failed to load forecast data.
+Failed to load forecast data. Check browser console for details.
 {% if threshold %}
 Active Thresholds
-Mean Wind ⚠️ {{ threshold.wind_mean_caution }} m/s 🛑 {{ threshold.wind_mean_cancel }} m/s
-Gusts ⚠️ {{ threshold.gust_caution }} m/s 🛑 {{ threshold.gust_cancel }} m/s
-Precipitation ⚠️ {{ threshold.precip_caution }} mm/h 🛑 {{ threshold.precip_cancel }} mm/h
-Min Temperature ⚠️ {{ threshold.temp_min_caution }}°C 🛑 {{ threshold.temp_min_cancel }}°C
+Mean Wind ⚠ {{ threshold.wind_mean_caution }} m/s 🛑 {{ threshold.wind_mean_cancel }} m/s
+Gusts ⚠ {{ threshold.gust_caution }} m/s 🛑 {{ threshold.gust_cancel }} m/s
+Precipitation ⚠ {{ threshold.precip_caution }} mm/h 🛑 {{ threshold.precip_cancel }} mm/h
+Min Temperature ⚠ {{ threshold.temp_min_caution }}°C 🛑 {{ threshold.temp_min_cancel }}°C
 {% endif %} {% else %}
 No Forecasts Available
-Forecasts for this site haven't been generated yet.
+Forecasts for this site have not been generated yet.
 
 Forecasts run automatically at 06:00 and 14:00 UTC daily.
 
