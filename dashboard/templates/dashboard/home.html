@@ -84,11 +84,11 @@
                         {% if site.latest_run %}
                             {% with risk=site.latest_run.peak_risk %}
                                 {% if risk < 20 %}
-                                    <span class="risk-bar risk-low" style="--risk-width: {{ risk }}%">{{ risk|floatformat:0 }}%</span>
+                                    <span class="risk-bar risk-low">{{ risk|floatformat:0 }}%</span>
                                 {% elif risk < 50 %}
-                                    <span class="risk-bar risk-medium" style="--risk-width: {{ risk }}%">{{ risk|floatformat:0 }}%</span>
+                                    <span class="risk-bar risk-medium">{{ risk|floatformat:0 }}%</span>
                                 {% else %}
-                                    <span class="risk-bar risk-high" style="--risk-width: {{ risk }}%">{{ risk|floatformat:0 }}%</span>
+                                    <span class="risk-bar risk-high">{{ risk|floatformat:0 }}%</span>
                                 {% endif %}
                             {% endwith %}
                         {% else %}
@@ -98,11 +98,11 @@
                     <td>
                         {% if site.latest_run %}
                             {% if site.latest_run.recommendation == "GO" %}
-                                <span class="badge badge-active">🟢 GO</span>
+                                <span class="badge badge-active">GO</span>
                             {% elif site.latest_run.recommendation == "CAUTION" %}
-                                <span class="badge badge-caution">🟡 CAUTION</span>
+                                <span class="badge badge-caution">CAUTION</span>
                             {% elif site.latest_run.recommendation == "CANCEL" %}
-                                <span class="badge badge-cancel">🔴 CANCEL</span>
+                                <span class="badge badge-cancel">CANCEL</span>
                             {% else %}
                                 <span class="badge badge-muted">{{ site.latest_run.recommendation }}</span>
                             {% endif %}
