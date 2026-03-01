@@ -183,7 +183,11 @@
 {% if forecast_days %}
 <script>
 (function() {
-    var API_URL = "{% url 'dashboard:chart_data' site.pk %}";
+    // ============================================================
+    // DATA — embedded directly by Django, no AJAX fetch needed
+    // ============================================================
+    var CHART_DATA = {{ chart_data_json|safe }};
+
     var WORK_START = 7;
     var WORK_END = 18;
 
@@ -201,30 +205,23 @@
 
     var charts = {};
 
-    fetch(API_URL, { credentials: 'same-origin' })
-        .then(function(r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
-        })
-        .then(function(data) {
-            if (!data.hourly || data.hourly.length === 0) {
-                document.getElementById('hourly-tbody').innerHTML =
-                    '<tr><td colspan="6" class="loading-cell">No hourly data available.</td></tr>';
-                return;
-            }
-            var labels = data.hourly.map(function(h) { return new Date(h.time); });
-            var thresholds = data.thresholds;
-            buildRiskChart(labels, data.hourly);
-            buildWindChart(labels, data.hourly, thresholds);
-            buildPrecipChart(labels, data.hourly, thresholds);
-            buildTempChart(labels, data.hourly, thresholds);
-            buildTable(data.hourly);
-        })
-        .catch(function(err) {
-            console.error('Forecast data error:', err);
-            document.getElementById('hourly-tbody').innerHTML =
-                '<tr><td colspan="6" class="loading-cell">Failed to load forecast data.</td></tr>';
-        });
+    // Use inline data directly — no fetch() needed
+    var data = CHART_DATA;
+
+    if (!data.hourly || data.hourly.length === 0) {
+        document.getElementById('hourly-tbody').innerHTML =
+            '<tr><td colspan="6" class="loading-cell">No hourly data available. (debug: run_ids=' +
+            JSON.stringify(data.debug ? data.debug.run_ids : []) +
+            ', count=' + (data.debug ? data.debug.hourly_count : 'n/a') + ')</td></tr>';
+    } else {
+        var labels = data.hourly.map(function(h) { return new Date(h.time); });
+        var thresholds = data.thresholds;
+        buildRiskChart(labels, data.hourly);
+        buildWindChart(labels, data.hourly, thresholds);
+        buildPrecipChart(labels, data.hourly, thresholds);
+        buildTempChart(labels, data.hourly, thresholds);
+        buildTable(data.hourly);
+    }
 
     function commonScales(yLabel) {
         return {
