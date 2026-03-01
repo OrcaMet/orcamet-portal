@@ -122,7 +122,7 @@ def calculate_hourly_risk(wind: float, gust: float, precip: float, temp: float,
     )
 
     if np.isnan(r):
-        return np.nan
+        return 0.0
 
     prob = sigmoid(6.0 * (r - 0.45))
     return float(np.clip(prob * 100, 0.0, 100.0))
@@ -244,9 +244,9 @@ def _create_weighted_ensemble(ensemble_data: dict, model_names: list) -> pd.Data
             values = data.get(var)
             if values is None:
                 values = [np.nan] * n_times
-            values = np.array(values)
-            values = np.array(values, dtype=float)  # None → NaN automatically
-            values = np.nan_to_num(values, nan=0.0)  # or keep NaN and handle downstream
+            # Convert to float array — None elements become NaN automatically
+            values = np.array(values, dtype=object)
+            values = np.where(values == None, np.nan, values).astype(float)  # noqa: E711
             if len(values) == n_times:
                 ensemble_vars[var] += weight * values
                 raw_values[var].append(values)
@@ -264,6 +264,7 @@ def _create_weighted_ensemble(ensemble_data: dict, model_names: list) -> pd.Data
         **spread,
         "n_models": len(model_names),
     })
+    # Replace any remaining NaN values with 0.0 to prevent PostgreSQL errors
+    df = df.fillna(0.0)
     df.attrs["models_used"] = model_names
     return df
-
