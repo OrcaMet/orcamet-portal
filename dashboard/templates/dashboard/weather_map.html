@@ -221,8 +221,60 @@ var map=L.map('wmap',{center:[54.5,-2.5],zoom:6,maxBounds:[[46,-15],[62,8]],minZ
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'&copy; OSM &copy; CARTO',subdomains:'abcd',maxZoom:20}).addTo(map);
 
 /* ================================================================
-   CANVAS OVERLAY for weather field
+   CANVAS OVERLAY — bilinear interpolated smooth field
    ================================================================ */
+
+// Build a fast-lookup 2D grid from the flat gridStore array
+var valGrid=null; // Float32Array[nLat*nLon], rebuilt per frame
+var nLat=0, nLon=0;
+
+function buildLookup(){
+    nLat=Math.round((G_LAT1-G_LAT0)/G_STEP)+1;
+    nLon=Math.round((G_LON1-G_LON0)/G_STEP)+1;
+    // Map from gridStore into a 2D indexed array for fast bilinear lookup
+    // gridIdx[latIdx * nLon + lonIdx] = index into gridStore, or -1
+    window._gridIdx=new Int32Array(nLat*nLon).fill(-1);
+    for(var i=0;i<gridStore.length;i++){
+        var li=Math.round((gridStore[i].lat-G_LAT0)/G_STEP);
+        var lj=Math.round((gridStore[i].lon-G_LON0)/G_STEP);
+        if(li>=0&&li<nLat&&lj>=0&&lj<nLon) window._gridIdx[li*nLon+lj]=i;
+    }
+    valGrid=new Float32Array(nLat*nLon);
+}
+
+function fillValGrid(ti){
+    for(var i=0;i<nLat;i++){
+        for(var j=0;j<nLon;j++){
+            var gi=window._gridIdx[i*nLon+j];
+            if(gi<0){valGrid[i*nLon+j]=NaN;continue;}
+            var h=gridStore[gi].d;
+            if(ti>=h.length){valGrid[i*nLon+j]=NaN;continue;}
+            var d=h[ti];
+            var v;
+            if(curVar==='risk') v=cRisk(d[0],d[1],d[2],d[3]);
+            else if(curVar==='wind') v=d[0];
+            else if(curVar==='gust') v=d[1];
+            else if(curVar==='precip') v=d[2];
+            else v=d[3];
+            valGrid[i*nLon+j]=v;
+        }
+    }
+}
+
+function bilinear(lat,lon){
+    // Continuous grid coordinates
+    var fi=(lat-G_LAT0)/G_STEP;
+    var fj=(lon-G_LON0)/G_STEP;
+    var i0=fi|0, j0=fj|0;
+    var i1=i0+1, j1=j0+1;
+    if(i0<0||j0<0||i1>=nLat||j1>=nLon) return NaN;
+    var di=fi-i0, dj=fj-j0;
+    var v00=valGrid[i0*nLon+j0], v01=valGrid[i0*nLon+j1];
+    var v10=valGrid[i1*nLon+j0], v11=valGrid[i1*nLon+j1];
+    if(v00!==v00||v01!==v01||v10!==v10||v11!==v11) return NaN; // NaN check
+    return v00*(1-di)*(1-dj) + v01*(1-di)*dj + v10*di*(1-dj) + v11*di*dj;
+}
+
 var WeatherCanvas=L.Layer.extend({
     onAdd:function(m){
         this._map=m;
@@ -245,41 +297,62 @@ var WeatherCanvas=L.Layer.extend({
         this.draw();
     },
     draw:function(){
-        if(!gridStore||!gridStore.length||gridTimestamps.length===0)return;
-        var ctx=this._el.getContext('2d');
-        ctx.clearRect(0,0,this._el.width,this._el.height);
-        var m=this._map, z=m.getZoom();
-        var ti=curIdx;
+        if(!gridStore.length||!gridTimestamps.length||!valGrid)return;
+        var cv=this._el, ctx=cv.getContext('2d');
+        var W=cv.width, H=cv.height;
+        if(!W||!H)return;
+        var m=this._map;
 
-        // Adaptive cell padding for smoother look at higher zoom
-        var pad=z>=8?0.02:z>=7?0.01:0;
-        var halfStep=G_STEP/2+pad;
+        fillValGrid(curIdx);
 
-        for(var i=0;i<gridStore.length;i++){
-            var pt=gridStore[i];
-            var dat=pt.d;
-            if(ti>=dat.length)continue;
-            var h=dat[ti];
-            var val;
-            if(curVar==='risk') val=cRisk(h[0],h[1],h[2],h[3]);
-            else if(curVar==='wind') val=h[0];
-            else if(curVar==='gust') val=h[1];
-            else if(curVar==='precip') val=h[2];
-            else val=h[3]; // temp
+        // Determine pixel step — render every Nth pixel for performance
+        // At zoom 6 we sample every 3px, at zoom 8+ every 1px
+        var z=m.getZoom();
+        var step=z>=9?1:z>=7?2:3;
 
-            // Skip very low precip for cleaner look
-            if(curVar==='precip'&&val<0.05)continue;
+        var imgData=ctx.createImageData(W,H);
+        var buf=imgData.data;
 
-            var c=toRgb(val,curVar);
-            var nw=m.latLngToContainerPoint([pt.lat+halfStep,pt.lon-halfStep]);
-            var se=m.latLngToContainerPoint([pt.lat-halfStep,pt.lon+halfStep]);
-            var w=se.x-nw.x, ht=se.y-nw.y;
-            if(nw.x>this._el.width||se.x<0||nw.y>this._el.height||se.y<0)continue;
+        // Edge fade: compute grid bounds in container coordinates
+        var nwPt=m.latLngToContainerPoint([G_LAT1,G_LON0]);
+        var sePt=m.latLngToContainerPoint([G_LAT0,G_LON1]);
+        var fadeEdge=20; // px of fade at edges
 
-            var opacity=curVar==='precip'?Math.min(0.7,0.15+val*0.18):0.55;
-            ctx.fillStyle='rgba('+c[0]+','+c[1]+','+c[2]+','+opacity+')';
-            ctx.fillRect(nw.x,nw.y,w,ht);
+        for(var py=0;py<H;py+=step){
+            for(var px=0;px<W;px+=step){
+                var ll=m.containerPointToLatLng([px,py]);
+                var val=bilinear(ll.lat,ll.lng);
+                if(val!==val) continue; // NaN
+
+                // Skip near-zero precip
+                if(curVar==='precip'&&val<0.03) continue;
+
+                var c=toRgb(val,curVar);
+
+                // Base opacity
+                var alpha=curVar==='precip'?Math.min(180,40+val*50):140;
+
+                // Edge fade
+                var ef=1;
+                if(px<nwPt.x+fadeEdge) ef=Math.min(ef,Math.max(0,(px-nwPt.x)/fadeEdge));
+                if(px>sePt.x-fadeEdge) ef=Math.min(ef,Math.max(0,(sePt.x-px)/fadeEdge));
+                if(py<nwPt.y+fadeEdge) ef=Math.min(ef,Math.max(0,(py-nwPt.y)/fadeEdge));
+                if(py>sePt.y-fadeEdge) ef=Math.min(ef,Math.max(0,(sePt.y-py)/fadeEdge));
+                alpha=alpha*ef|0;
+
+                if(alpha<=0)continue;
+
+                // Fill the step×step block
+                for(var dy=0;dy<step&&py+dy<H;dy++){
+                    for(var dx=0;dx<step&&px+dx<W;dx++){
+                        var off=((py+dy)*W+(px+dx))*4;
+                        buf[off]=c[0]; buf[off+1]=c[1]; buf[off+2]=c[2]; buf[off+3]=alpha;
+                    }
+                }
+            }
         }
+
+        ctx.putImageData(imgData,0,0);
     }
 });
 var wxCanvas=new WeatherCanvas();
@@ -542,6 +615,7 @@ Promise.all([
     loadSites(),
     loadHourly()
 ]).then(function(){
+    buildLookup();
     if(gridTimestamps.length){
         $rng.max=gridTimestamps.length-1;
         $rng.value=0;
