@@ -390,3 +390,195 @@ def forecast_chart_data(request, site_id):
     }
 
     return JsonResponse(data)
+
+
+@login_required(login_url="/login/")
+def map_sites_hourly_json(request):
+    """
+    JSON API endpoint returning all visible sites with their full hourly
+    forecast timeseries. Used by the map time slider to update marker
+    colours and popup values at each hour.
+
+    Returns a dict keyed by ISO timestamp, each containing a GeoJSON
+    FeatureCollection of site states at that hour.
+    """
+    user = request.user
+    sites_qs = _get_user_sites(user)
+    today = date.today()
+
+    # Get the latest successful run per site per date
+    sites_with_coords = sites_qs.filter(
+        latitude__isnull=False, longitude__isnull=False
+    ).select_related("client")
+
+    # Collect latest run IDs per site
+    site_run_map = {}  # site_id -> run
+    for site in sites_with_coords:
+        run = (
+            ForecastRun.objects.filter(
+                site=site,
+                status=ForecastRun.Status.SUCCESS,
+                forecast_date__gte=today,
+            )
+            .order_by("forecast_date", "-generated_at")
+            .first()
+        )
+        if run:
+            site_run_map[site.pk] = (site, run)
+
+    if not site_run_map:
+        return JsonResponse({"timestamps": [], "frames": {}})
+
+    # Fetch all hourly data for these runs in one query
+    run_ids = [run.pk for _, run in site_run_map.values()]
+    hourly_qs = (
+        HourlyForecast.objects.filter(run_id__in=run_ids)
+        .order_by("timestamp")
+        .values(
+            "run__site_id",
+            "timestamp",
+            "wind_speed",
+            "wind_gusts",
+            "precipitation",
+            "temperature",
+            "hourly_risk",
+        )
+    )
+
+    # Organise by timestamp -> site features
+    from collections import defaultdict
+    frames = defaultdict(list)
+
+    for h in hourly_qs:
+        site_id = h["run__site_id"]
+        if site_id not in site_run_map:
+            continue
+
+        site, run = site_run_map[site_id]
+        ts = h["timestamp"].isoformat()
+
+        risk = round(h["hourly_risk"], 1)
+        if risk < 20:
+            rec = "GO"
+        elif risk < 50:
+            rec = "CAUTION"
+        else:
+            rec = "CANCEL"
+
+        frames[ts].append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [site.longitude, site.latitude],
+            },
+            "properties": {
+                "id": site.pk,
+                "name": site.name,
+                "client": site.client.name,
+                "postcode": site.postcode,
+                "recommendation": rec,
+                "risk": risk,
+                "wind_speed": round(h["wind_speed"], 1),
+                "wind_gusts": round(h["wind_gusts"], 1),
+                "precipitation": round(h["precipitation"], 1),
+                "temperature": round(h["temperature"], 1),
+            },
+        })
+
+    timestamps = sorted(frames.keys())
+
+    return JsonResponse({
+        "timestamps": timestamps,
+        "frames": {
+            ts: {"type": "FeatureCollection", "features": frames[ts]}
+            for ts in timestamps
+        },
+    })
+
+
+@login_required(login_url="/login/")
+def map_risk_grid_json(request):
+    """
+    JSON API endpoint returning the UK-wide risk grid data organised
+    by timestamp for the heatmap layer.
+
+    Query params:
+        timestamp (optional) — ISO timestamp to fetch a single frame.
+                               If omitted, returns all available timestamps
+                               and the grid metadata.
+
+    Returns GeoJSON with risk values at each grid point for the given hour.
+    """
+    from forecasts.models import UKRiskGridRun, UKRiskGridPoint
+
+    today = date.today()
+
+    # Find the latest successful grid run for today (or most recent)
+    grid_run = (
+        UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS)
+        .order_by("-forecast_date", "-generated_at")
+        .first()
+    )
+
+    if not grid_run:
+        return JsonResponse({
+            "available": False,
+            "message": "No risk grid data available",
+        })
+
+    requested_ts = request.GET.get("timestamp")
+
+    if requested_ts:
+        # Return a single frame
+        from django.utils.dateparse import parse_datetime
+        ts = parse_datetime(requested_ts)
+        if not ts:
+            return JsonResponse({"error": "Invalid timestamp"}, status=400)
+
+        points = (
+            UKRiskGridPoint.objects.filter(run=grid_run, timestamp=ts)
+            .values("latitude", "longitude", "risk", "wind_speed", "wind_gusts",
+                    "precipitation", "temperature")
+        )
+
+        features = [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [p["longitude"], p["latitude"]],
+                },
+                "properties": {
+                    "risk": round(p["risk"], 1),
+                    "wind": round(p["wind_speed"], 1),
+                    "gust": round(p["wind_gusts"], 1),
+                    "precip": round(p["precipitation"], 1),
+                    "temp": round(p["temperature"], 1),
+                },
+            }
+            for p in points
+        ]
+
+        return JsonResponse({
+            "type": "FeatureCollection",
+            "features": features,
+            "timestamp": requested_ts,
+        })
+
+    else:
+        # Return metadata + all available timestamps
+        timestamps = list(
+            UKRiskGridPoint.objects.filter(run=grid_run)
+            .values_list("timestamp", flat=True)
+            .distinct()
+            .order_by("timestamp")
+        )
+
+        return JsonResponse({
+            "available": True,
+            "forecast_date": grid_run.forecast_date.isoformat(),
+            "generated_at": grid_run.generated_at.isoformat(),
+            "resolution": grid_run.resolution,
+            "grid_points": grid_run.grid_points,
+            "timestamps": [t.isoformat() for t in timestamps],
+        })
