@@ -215,6 +215,93 @@ def site_detail(request, site_id):
 
 
 @login_required(login_url="/login/")
+def weather_map(request):
+    """
+    Interactive Leaflet map showing all sites with live risk status.
+    Site markers are colour-coded by recommendation (GO/CAUTION/CANCEL).
+    Clicking a marker opens a popup with key forecast stats and a link
+    to the full site detail page.
+    """
+    user = request.user
+    sites_qs = _get_user_sites(user)
+    sites_list = _annotate_sites_with_forecasts(sites_qs)
+
+    total_sites = len(sites_list)
+    go_count = sum(1 for s in sites_list if s.latest_run and s.latest_run.recommendation == "GO")
+    caution_count = sum(1 for s in sites_list if s.latest_run and s.latest_run.recommendation == "CAUTION")
+    cancel_count = sum(1 for s in sites_list if s.latest_run and s.latest_run.recommendation == "CANCEL")
+    pending_count = sum(1 for s in sites_list if not s.latest_run)
+
+    context = {
+        "user": user,
+        "total_sites": total_sites,
+        "go_count": go_count,
+        "caution_count": caution_count,
+        "cancel_count": cancel_count,
+        "pending_count": pending_count,
+    }
+    return render(request, "dashboard/weather_map.html", context)
+
+
+@login_required(login_url="/login/")
+def map_sites_json(request):
+    """
+    JSON API endpoint returning all visible sites with coordinates
+    and latest forecast data for the Leaflet map.
+    """
+    user = request.user
+    sites_qs = _get_user_sites(user)
+    sites_list = _annotate_sites_with_forecasts(sites_qs)
+
+    features = []
+    for site in sites_list:
+        if not site.latitude or not site.longitude:
+            continue
+
+        run = site.latest_run
+        props = {
+            "id": site.pk,
+            "name": site.name,
+            "client": site.client.name,
+            "postcode": site.postcode,
+            "exposure": site.get_exposure_display(),
+            "job_complete": site.job_complete,
+            "has_forecast": run is not None,
+        }
+
+        if run:
+            props.update({
+                "recommendation": run.recommendation,
+                "peak_risk": round(run.peak_risk, 1) if run.peak_risk is not None else None,
+                "peak_wind": round(run.peak_wind, 1) if run.peak_wind is not None else None,
+                "peak_gust": round(run.peak_gust, 1) if run.peak_gust is not None else None,
+                "peak_precip": round(run.peak_precip, 1) if run.peak_precip is not None else None,
+                "min_temp": round(run.min_temp, 1) if run.min_temp is not None else None,
+                "forecast_date": run.forecast_date.isoformat(),
+                "generated_at": run.generated_at.isoformat(),
+            })
+        else:
+            props.update({
+                "recommendation": "PENDING",
+                "peak_risk": None,
+            })
+
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [site.longitude, site.latitude],
+            },
+            "properties": props,
+        })
+
+    return JsonResponse({
+        "type": "FeatureCollection",
+        "features": features,
+    })
+
+
+@login_required(login_url="/login/")
 def forecast_chart_data(request, site_id):
     """
     JSON API endpoint — kept as a debug tool.
