@@ -1,0 +1,850 @@
+{% extends "orcamet_portal/base.html" %}
+{% load static %}
+
+{% block title %}Weather Map — OrcaMet Portal{% endblock %}
+
+{% block extra_head %}
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="" />
+
+<!-- Leaflet MarkerCluster CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+<style>
+    /* ============================================================
+       WEATHER MAP — Full-viewport Leaflet with OrcaMet overlay
+       ============================================================ */
+
+    .map-page {
+        display: flex;
+        flex-direction: column;
+        height: calc(100vh - 64px - 60px); /* viewport minus nav and footer */
+        min-height: 500px;
+    }
+
+    /* --- Map Controls Bar --- */
+    .map-controls {
+        background: var(--ocean-mid);
+        border-bottom: 1px solid var(--border);
+        padding: 0.6rem 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        z-index: 500;
+    }
+
+    .map-title {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+    }
+
+    .map-title h1 {
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: var(--white);
+        margin: 0;
+    }
+
+    .map-title .map-icon {
+        font-size: 1.3rem;
+    }
+
+    .map-stats {
+        display: flex;
+        gap: 1rem;
+        align-items: center;
+    }
+
+    .map-stat {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.8rem;
+        font-weight: 600;
+        padding: 0.25rem 0.6rem;
+        border-radius: 4px;
+    }
+
+    .map-stat-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+    }
+
+    .stat-go .map-stat-dot { background: var(--green-go); }
+    .stat-go { color: var(--green-go); background: rgba(34, 197, 94, 0.1); }
+
+    .stat-caution .map-stat-dot { background: var(--amber-caution); }
+    .stat-caution { color: var(--amber-caution); background: rgba(245, 158, 11, 0.1); }
+
+    .stat-cancel .map-stat-dot { background: var(--red-cancel); }
+    .stat-cancel { color: var(--red-cancel); background: rgba(239, 68, 68, 0.1); }
+
+    .stat-pending .map-stat-dot { background: var(--text-secondary); }
+    .stat-pending { color: var(--text-secondary); background: rgba(148, 163, 184, 0.1); }
+
+    .map-filter-group {
+        display: flex;
+        gap: 0.4rem;
+    }
+
+    .map-filter-btn {
+        padding: 0.3rem 0.7rem;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text-secondary);
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+
+    .map-filter-btn:hover {
+        border-color: var(--teal);
+        color: var(--white);
+    }
+
+    .map-filter-btn.active {
+        background: var(--teal);
+        border-color: var(--teal);
+        color: var(--white);
+    }
+
+    /* --- Map Container --- */
+    .map-container {
+        flex: 1;
+        position: relative;
+    }
+
+    #weather-map {
+        width: 100%;
+        height: 100%;
+        background: var(--ocean-dark);
+    }
+
+    /* Dark Leaflet tile overrides */
+    .leaflet-container {
+        background: var(--ocean-dark);
+        font-family: inherit;
+    }
+
+    /* Remove default Leaflet blue link styling */
+    .leaflet-container a {
+        color: var(--teal-bright);
+    }
+
+    /* Style the attribution */
+    .leaflet-control-attribution {
+        background: rgba(10, 22, 40, 0.85) !important;
+        color: var(--text-secondary) !important;
+        font-size: 0.65rem !important;
+        padding: 2px 6px !important;
+    }
+
+    .leaflet-control-attribution a {
+        color: var(--teal) !important;
+    }
+
+    /* Zoom controls */
+    .leaflet-control-zoom a {
+        background: var(--surface) !important;
+        color: var(--text-primary) !important;
+        border-color: var(--border) !important;
+    }
+
+    .leaflet-control-zoom a:hover {
+        background: var(--surface-light) !important;
+    }
+
+    /* --- Custom Markers --- */
+    .site-marker {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 50% 50% 50% 0;
+        transform: rotate(-45deg);
+        border: 2px solid rgba(255, 255, 255, 0.5);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 12px rgba(0, 0, 0, 0.2);
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .site-marker:hover {
+        transform: rotate(-45deg) scale(1.15);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 20px rgba(0, 0, 0, 0.3);
+    }
+
+    .site-marker-inner {
+        transform: rotate(45deg);
+        font-size: 12px;
+        font-weight: 700;
+        color: white;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    }
+
+    .marker-go {
+        background: linear-gradient(135deg, #22c55e, #16a34a);
+        border-color: rgba(255, 255, 255, 0.6);
+    }
+
+    .marker-caution {
+        background: linear-gradient(135deg, #f59e0b, #d97706);
+        border-color: rgba(255, 255, 255, 0.6);
+    }
+
+    .marker-cancel {
+        background: linear-gradient(135deg, #ef4444, #dc2626);
+        border-color: rgba(255, 255, 255, 0.6);
+        animation: pulse-cancel 2s ease-in-out infinite;
+    }
+
+    .marker-pending {
+        background: linear-gradient(135deg, #64748b, #475569);
+        border-color: rgba(255, 255, 255, 0.4);
+    }
+
+    .marker-complete {
+        background: linear-gradient(135deg, #334155, #1e293b);
+        border-color: rgba(255, 255, 255, 0.2);
+        opacity: 0.6;
+    }
+
+    @keyframes pulse-cancel {
+        0%, 100% { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 0 rgba(239, 68, 68, 0.4); }
+        50% { box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 8px rgba(239, 68, 68, 0); }
+    }
+
+    /* --- Popups --- */
+    .leaflet-popup-content-wrapper {
+        background: var(--surface) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: var(--radius) !important;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+        color: var(--text-primary) !important;
+        padding: 0 !important;
+    }
+
+    .leaflet-popup-content {
+        margin: 0 !important;
+        min-width: 260px;
+    }
+
+    .leaflet-popup-tip {
+        background: var(--surface) !important;
+        border: 1px solid var(--border) !important;
+    }
+
+    .leaflet-popup-close-button {
+        color: var(--text-secondary) !important;
+        font-size: 20px !important;
+        padding: 6px 8px !important;
+        width: auto !important;
+        height: auto !important;
+    }
+
+    .leaflet-popup-close-button:hover {
+        color: var(--white) !important;
+    }
+
+    .popup-content {
+        padding: 0;
+    }
+
+    .popup-header {
+        padding: 0.8rem 1rem;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .popup-site-name {
+        font-weight: 700;
+        color: var(--white);
+        font-size: 0.95rem;
+    }
+
+    .popup-client {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+
+    .popup-recommendation {
+        padding: 0.15rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .popup-rec-go { background: rgba(34, 197, 94, 0.15); color: var(--green-go); }
+    .popup-rec-caution { background: rgba(245, 158, 11, 0.15); color: var(--amber-caution); }
+    .popup-rec-cancel { background: rgba(239, 68, 68, 0.15); color: var(--red-cancel); }
+    .popup-rec-pending { background: rgba(148, 163, 184, 0.15); color: var(--text-secondary); }
+
+    .popup-body {
+        padding: 0.8rem 1rem;
+    }
+
+    .popup-stats-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem 1.2rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .popup-stat {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .popup-stat-label {
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-secondary);
+        font-weight: 600;
+    }
+
+    .popup-stat-value {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--white);
+    }
+
+    .popup-meta {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        padding-top: 0.6rem;
+        border-top: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    .popup-link {
+        display: inline-block;
+        padding: 0.25rem 0.6rem;
+        background: var(--teal);
+        color: var(--white) !important;
+        border-radius: 4px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        text-decoration: none !important;
+        transition: background 0.15s;
+    }
+
+    .popup-link:hover {
+        background: var(--teal-bright);
+    }
+
+    .popup-no-forecast {
+        text-align: center;
+        padding: 0.5rem 0;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+
+    /* --- Cluster Overrides --- */
+    .marker-cluster-small,
+    .marker-cluster-medium,
+    .marker-cluster-large {
+        background: rgba(14, 165, 233, 0.25) !important;
+    }
+
+    .marker-cluster-small div,
+    .marker-cluster-medium div,
+    .marker-cluster-large div {
+        background: var(--teal) !important;
+        color: var(--white) !important;
+        font-weight: 700 !important;
+        font-size: 13px !important;
+    }
+
+    /* --- Loading overlay --- */
+    .map-loading {
+        position: absolute;
+        inset: 0;
+        background: rgba(10, 22, 40, 0.85);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        transition: opacity 0.4s;
+    }
+
+    .map-loading.loaded {
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .loading-spinner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .spinner-ring {
+        width: 40px;
+        height: 40px;
+        border: 3px solid var(--border);
+        border-top-color: var(--teal);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+    }
+
+    /* --- Layer control override --- */
+    .leaflet-control-layers {
+        background: var(--surface) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: var(--radius) !important;
+        color: var(--text-primary) !important;
+        box-shadow: var(--shadow) !important;
+    }
+
+    .leaflet-control-layers-toggle {
+        background-color: var(--surface) !important;
+        border: 1px solid var(--border) !important;
+    }
+
+    .leaflet-control-layers label {
+        color: var(--text-primary);
+        font-size: 0.85rem;
+    }
+
+    /* --- Responsive --- */
+    @media (max-width: 768px) {
+        .map-page {
+            height: calc(100vh - 64px - 40px);
+        }
+
+        .map-controls {
+            padding: 0.4rem 0.75rem;
+            gap: 0.5rem;
+        }
+
+        .map-title h1 {
+            font-size: 0.95rem;
+        }
+
+        .map-stats {
+            gap: 0.5rem;
+        }
+
+        .map-stat {
+            font-size: 0.7rem;
+            padding: 0.2rem 0.4rem;
+        }
+
+        .map-filter-group {
+            display: none; /* too cramped on mobile */
+        }
+
+        .popup-stats-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="map-page">
+
+    <!-- Controls Bar -->
+    <div class="map-controls">
+        <div class="map-title">
+            <span class="map-icon">🗺️</span>
+            <h1>Site Weather Map</h1>
+        </div>
+
+        <div class="map-stats">
+            {% if go_count %}
+            <div class="map-stat stat-go">
+                <span class="map-stat-dot"></span>
+                {{ go_count }} GO
+            </div>
+            {% endif %}
+            {% if caution_count %}
+            <div class="map-stat stat-caution">
+                <span class="map-stat-dot"></span>
+                {{ caution_count }} CAUTION
+            </div>
+            {% endif %}
+            {% if cancel_count %}
+            <div class="map-stat stat-cancel">
+                <span class="map-stat-dot"></span>
+                {{ cancel_count }} CANCEL
+            </div>
+            {% endif %}
+            {% if pending_count %}
+            <div class="map-stat stat-pending">
+                <span class="map-stat-dot"></span>
+                {{ pending_count }} Pending
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="map-filter-group">
+            <button class="map-filter-btn active" data-filter="all">All</button>
+            <button class="map-filter-btn" data-filter="GO">Go</button>
+            <button class="map-filter-btn" data-filter="CAUTION">Caution</button>
+            <button class="map-filter-btn" data-filter="CANCEL">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-container">
+        <div id="weather-map"></div>
+        <div class="map-loading" id="map-loading">
+            <div class="loading-spinner">
+                <div class="spinner-ring"></div>
+                <span class="loading-text">Loading site data…</span>
+            </div>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+
+<!-- Leaflet MarkerCluster JS -->
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+<script>
+(function () {
+    'use strict';
+
+    // ============================================================
+    // CONFIG
+    // ============================================================
+
+    const UK_CENTER = [54.5, -2.5];
+    const UK_ZOOM = 6;
+    const SITES_URL = '{% url "dashboard:map_sites_json" %}';
+
+    // Risk colour mapping
+    const MARKER_CLASSES = {
+        GO: 'marker-go',
+        CAUTION: 'marker-caution',
+        CANCEL: 'marker-cancel',
+        PENDING: 'marker-pending',
+    };
+
+    const REC_POPUP_CLASSES = {
+        GO: 'popup-rec-go',
+        CAUTION: 'popup-rec-caution',
+        CANCEL: 'popup-rec-cancel',
+        PENDING: 'popup-rec-pending',
+    };
+
+    // ============================================================
+    // MAP INITIALISATION
+    // ============================================================
+
+    const map = L.map('weather-map', {
+        center: UK_CENTER,
+        zoom: UK_ZOOM,
+        zoomControl: true,
+        attributionControl: true,
+        maxBounds: [[-5, -30], [72, 40]],
+        minZoom: 4,
+        maxZoom: 18,
+    });
+
+    // Dark tile layer — CartoDB Dark Matter
+    const darkTiles = L.tileLayer(
+        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+            subdomains: 'abcd',
+            maxZoom: 20,
+        }
+    );
+
+    // OpenStreetMap standard for satellite-like alternative
+    const standardTiles = L.tileLayer(
+        'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
+            maxZoom: 19,
+        }
+    );
+
+    // Open-Meteo weather radar overlay (precipitation)
+    const precipOverlay = L.tileLayer(
+        'https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=9de243494c0b295cca9337e1e96b00e2',
+        {
+            attribution: '&copy; OpenWeatherMap',
+            opacity: 0.5,
+            maxZoom: 18,
+        }
+    );
+
+    // Cloud cover overlay
+    const cloudOverlay = L.tileLayer(
+        'https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=9de243494c0b295cca9337e1e96b00e2',
+        {
+            attribution: '&copy; OpenWeatherMap',
+            opacity: 0.35,
+            maxZoom: 18,
+        }
+    );
+
+    // Wind overlay
+    const windOverlay = L.tileLayer(
+        'https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid=9de243494c0b295cca9337e1e96b00e2',
+        {
+            attribution: '&copy; OpenWeatherMap',
+            opacity: 0.45,
+            maxZoom: 18,
+        }
+    );
+
+    // Add default layer
+    darkTiles.addTo(map);
+
+    // Layer controls
+    const baseLayers = {
+        'Dark': darkTiles,
+        'Standard': standardTiles,
+    };
+
+    const overlayLayers = {
+        'Precipitation': precipOverlay,
+        'Cloud Cover': cloudOverlay,
+        'Wind': windOverlay,
+    };
+
+    L.control.layers(baseLayers, overlayLayers, { position: 'topright' }).addTo(map);
+
+    // ============================================================
+    // MARKER CREATION
+    // ============================================================
+
+    function createMarkerIcon(recommendation, complete) {
+        const cls = complete ? 'marker-complete' : (MARKER_CLASSES[recommendation] || 'marker-pending');
+        const label = complete ? '✓' : (recommendation === 'PENDING' ? '?' : recommendation.charAt(0));
+
+        return L.divIcon({
+            className: '',
+            html: `<div class="site-marker ${cls}"><span class="site-marker-inner">${label}</span></div>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 32],
+            popupAnchor: [0, -28],
+        });
+    }
+
+
+    function formatPopup(props) {
+        const rec = props.recommendation || 'PENDING';
+        const recClass = REC_POPUP_CLASSES[rec] || 'popup-rec-pending';
+
+        let statsHtml = '';
+        if (props.has_forecast) {
+            const risk = props.peak_risk !== null ? props.peak_risk + '%' : '—';
+            const wind = props.peak_wind !== null ? props.peak_wind + ' m/s' : '—';
+            const gust = props.peak_gust !== null ? props.peak_gust + ' m/s' : '—';
+            const precip = props.peak_precip !== null ? props.peak_precip + ' mm/h' : '—';
+            const temp = props.min_temp !== null ? props.min_temp + '°C' : '—';
+
+            // Forecast date formatting
+            let dateStr = '';
+            if (props.forecast_date) {
+                const d = new Date(props.forecast_date + 'T00:00:00');
+                dateStr = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+            }
+
+            // Generated time
+            let genStr = '';
+            if (props.generated_at) {
+                const g = new Date(props.generated_at);
+                genStr = g.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+            }
+
+            statsHtml = `
+                <div class="popup-stats-grid">
+                    <div class="popup-stat">
+                        <span class="popup-stat-label">Peak Risk</span>
+                        <span class="popup-stat-value">${risk}</span>
+                    </div>
+                    <div class="popup-stat">
+                        <span class="popup-stat-label">Peak Wind</span>
+                        <span class="popup-stat-value">${wind}</span>
+                    </div>
+                    <div class="popup-stat">
+                        <span class="popup-stat-label">Peak Gust</span>
+                        <span class="popup-stat-value">${gust}</span>
+                    </div>
+                    <div class="popup-stat">
+                        <span class="popup-stat-label">Precipitation</span>
+                        <span class="popup-stat-value">${precip}</span>
+                    </div>
+                    <div class="popup-stat">
+                        <span class="popup-stat-label">Min Temp</span>
+                        <span class="popup-stat-value">${temp}</span>
+                    </div>
+                    <div class="popup-stat">
+                        <span class="popup-stat-label">Exposure</span>
+                        <span class="popup-stat-value">${props.exposure}</span>
+                    </div>
+                </div>
+                <div class="popup-meta">
+                    <span>${dateStr} · ${genStr} UTC</span>
+                    <a href="/dashboard/site/${props.id}/" class="popup-link">Full Forecast →</a>
+                </div>
+            `;
+        } else {
+            statsHtml = `
+                <div class="popup-no-forecast">
+                    <p>No forecast data yet</p>
+                    <p style="font-size: 0.75rem; margin-top: 0.3rem;">${props.exposure} · ${props.postcode}</p>
+                </div>
+                <div class="popup-meta">
+                    <span>&nbsp;</span>
+                    <a href="/dashboard/site/${props.id}/" class="popup-link">View Site →</a>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="popup-content">
+                <div class="popup-header">
+                    <div>
+                        <div class="popup-site-name">${props.name}</div>
+                        <div class="popup-client">${props.client} · ${props.postcode}</div>
+                    </div>
+                    <span class="popup-recommendation ${recClass}">${rec}</span>
+                </div>
+                <div class="popup-body">
+                    ${statsHtml}
+                </div>
+            </div>
+        `;
+    }
+
+
+    // ============================================================
+    // DATA LOADING
+    // ============================================================
+
+    const clusterGroup = L.markerClusterGroup({
+        maxClusterRadius: 35,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true,
+        disableClusteringAtZoom: 10,
+    });
+
+    let allMarkers = [];   // { marker, recommendation }
+    let activeFilter = 'all';
+
+    function loadSites() {
+        fetch(SITES_URL)
+            .then(r => r.json())
+            .then(geojson => {
+                allMarkers = [];
+
+                geojson.features.forEach(function (feature) {
+                    const coords = feature.geometry.coordinates; // [lon, lat]
+                    const props = feature.properties;
+
+                    const icon = createMarkerIcon(props.recommendation, props.job_complete);
+                    const marker = L.marker([coords[1], coords[0]], { icon: icon });
+                    marker.bindPopup(formatPopup(props), { maxWidth: 320, minWidth: 260 });
+
+                    allMarkers.push({
+                        marker: marker,
+                        recommendation: props.recommendation,
+                        complete: props.job_complete,
+                    });
+                });
+
+                applyFilter(activeFilter);
+
+                // Auto-fit bounds if there are sites
+                if (allMarkers.length > 0) {
+                    const group = L.featureGroup(allMarkers.map(m => m.marker));
+                    map.fitBounds(group.getBounds().pad(0.15), { maxZoom: 12 });
+                }
+
+                // Remove loading overlay
+                document.getElementById('map-loading').classList.add('loaded');
+            })
+            .catch(err => {
+                console.error('Failed to load sites:', err);
+                document.getElementById('map-loading').innerHTML = `
+                    <div class="loading-spinner">
+                        <span class="loading-text" style="color: var(--red-cancel);">Failed to load site data</span>
+                    </div>
+                `;
+            });
+    }
+
+
+    function applyFilter(filter) {
+        activeFilter = filter;
+        clusterGroup.clearLayers();
+
+        allMarkers.forEach(function (item) {
+            if (filter === 'all' || item.recommendation === filter) {
+                clusterGroup.addLayer(item.marker);
+            }
+        });
+
+        if (!map.hasLayer(clusterGroup)) {
+            map.addLayer(clusterGroup);
+        }
+    }
+
+
+    // ============================================================
+    // FILTER BUTTONS
+    // ============================================================
+
+    document.querySelectorAll('.map-filter-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.querySelectorAll('.map-filter-btn').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            applyFilter(this.dataset.filter);
+        });
+    });
+
+
+    // ============================================================
+    // BOOT
+    // ============================================================
+
+    loadSites();
+
+    // Auto-refresh every 5 minutes
+    setInterval(loadSites, 5 * 60 * 1000);
+
+})();
+</script>
+{% endblock %}
