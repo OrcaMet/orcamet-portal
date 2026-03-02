@@ -509,16 +509,21 @@ def map_risk_grid_json(request):
 
     Returns GeoJSON with risk values at each grid point for the given hour.
     """
-    from forecasts.models import UKRiskGridRun, UKRiskGridPoint
+    try:
+        from forecasts.models import UKRiskGridRun, UKRiskGridPoint
+    except Exception:
+        return JsonResponse({"available": False, "message": "Risk grid models not available"})
 
-    today = date.today()
-
-    # Find the latest successful grid run for today (or most recent)
-    grid_run = (
-        UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS)
-        .order_by("-forecast_date", "-generated_at")
-        .first()
-    )
+    try:
+        # Find the latest successful grid run
+        grid_run = (
+            UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS)
+            .order_by("-forecast_date", "-generated_at")
+            .first()
+        )
+    except Exception:
+        # Table doesn't exist yet (migration not run)
+        return JsonResponse({"available": False, "message": "Risk grid not yet configured"})
 
     if not grid_run:
         return JsonResponse({
