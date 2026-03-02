@@ -31,6 +31,7 @@
             </div>
         </div>
     </nav>
+
     <main class="main-content">
         {% if messages %}
         <div class="messages">
@@ -39,13 +40,16 @@
             {% endfor %}
         </div>
         {% endif %}
+
         {% block content %}{% endblock %}
     </main>
+
     <footer class="footer">
         <div class="footer-container">
             <p>&copy; OrcaMet {% now "Y" %} — Precision Weather Intelligence for Rope Access Operations</p>
         </div>
     </footer>
+
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>
