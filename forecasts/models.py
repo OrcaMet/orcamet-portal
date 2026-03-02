@@ -117,3 +117,76 @@ class UKRiskMap(models.Model):
 
     def __str__(self):
         return f"UK Risk Map — {self.forecast_date}"
+
+
+class UKRiskGridRun(models.Model):
+    """
+    A single generation run of the UK-wide risk grid.
+    Contains metadata about the grid; actual point data is in UKRiskGridPoint.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+
+    forecast_date = models.DateField()
+    generated_at = models.DateTimeField(default=timezone.now)
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+
+    # Grid configuration stored for reference
+    lat_min = models.FloatField(default=49.9)
+    lat_max = models.FloatField(default=58.7)
+    lon_min = models.FloatField(default=-7.6)
+    lon_max = models.FloatField(default=1.8)
+    resolution = models.FloatField(default=0.5, help_text="Grid spacing in degrees")
+
+    grid_points = models.IntegerField(default=0)
+    num_hours = models.IntegerField(default=0)
+    models_used = models.JSONField(default=list)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-generated_at"]
+
+    def __str__(self):
+        return f"UK Risk Grid — {self.forecast_date} ({self.get_status_display()})"
+
+
+class UKRiskGridPoint(models.Model):
+    """
+    A single grid point's hourly risk data within a UKRiskGridRun.
+    Each row represents one (lat, lon, timestamp) tuple with weather and risk values.
+    """
+
+    run = models.ForeignKey(
+        UKRiskGridRun,
+        on_delete=models.CASCADE,
+        related_name="points",
+    )
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    timestamp = models.DateTimeField()
+
+    # Weather values (ensemble-blended)
+    wind_speed = models.FloatField(default=0.0)
+    wind_gusts = models.FloatField(default=0.0)
+    precipitation = models.FloatField(default=0.0)
+    temperature = models.FloatField(default=0.0)
+
+    # Computed risk
+    risk = models.FloatField(default=0.0, help_text="Risk score 0-100%")
+
+    class Meta:
+        ordering = ["timestamp", "latitude", "longitude"]
+        indexes = [
+            models.Index(fields=["run", "timestamp"]),
+        ]
+
+    def __str__(self):
+        return f"({self.latitude:.2f}, {self.longitude:.2f}) {self.timestamp:%H:%M} — {self.risk:.0f}%"
