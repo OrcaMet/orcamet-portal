@@ -19,6 +19,7 @@
             <div class="nav-links">
                 {% if user.is_authenticated %}
                     <a href="{% url 'dashboard:home' %}" class="nav-link">Dashboard</a>
+                    <a href="{% url 'dashboard:weather_map' %}" class="nav-link">Map</a>
                     {% if user.is_superadmin %}
                         <a href="/admin/" class="nav-link">Admin</a>
                     {% endif %}
@@ -30,7 +31,6 @@
             </div>
         </div>
     </nav>
-
     <main class="main-content">
         {% if messages %}
         <div class="messages">
@@ -39,16 +39,13 @@
             {% endfor %}
         </div>
         {% endif %}
-
         {% block content %}{% endblock %}
     </main>
-
     <footer class="footer">
         <div class="footer-container">
             <p>&copy; OrcaMet {% now "Y" %} — Precision Weather Intelligence for Rope Access Operations</p>
         </div>
     </footer>
-
     {% block extra_scripts %}{% endblock %}
 </body>
 </html>
