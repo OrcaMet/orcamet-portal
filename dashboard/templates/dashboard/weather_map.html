@@ -8,146 +8,107 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <style>
-/* Force full-width for map page */
-.main-content { max-width: 100% !important; padding: 0 !important; }
-.footer { display: none; }
+/* Full-viewport override */
+.main-content { max-width:100%!important; padding:0!important; }
+.footer { display:none; }
+.map-app { display:flex; flex-direction:column; height:calc(100vh - 64px); }
 
-.map-app { display: flex; flex-direction: column; height: calc(100vh - 64px); }
-
-/* --- Variable bar --- */
-.var-bar {
-    background: var(--ocean-mid); border-bottom: 1px solid var(--border);
-    padding: 0.5rem 1rem; display: flex; align-items: center; justify-content: space-between;
-    gap: 0.75rem; flex-wrap: wrap; z-index: 500;
-}
-.var-bar-left { display: flex; align-items: center; gap: 1rem; }
-.var-bar-title { font-weight: 700; color: #fff; font-size: 1rem; }
-.var-pills { display: flex; gap: 3px; background: var(--ocean-dark); border-radius: 6px; padding: 3px; }
-.var-pill {
-    padding: 0.3rem 0.7rem; border: none; background: transparent;
-    color: var(--text-secondary); font-size: 0.75rem; font-weight: 600;
-    border-radius: 4px; cursor: pointer; transition: all 0.15s;
-    font-family: inherit;
-}
-.var-pill:hover { color: var(--text-primary); }
-.var-pill.active { background: var(--teal); color: #fff; }
-
-.var-bar-right { display: flex; align-items: center; gap: 0.75rem; }
-.site-counts { display: flex; gap: 0.5rem; }
-.sc { font-size: 0.72rem; font-weight: 600; padding: 0.2rem 0.5rem; border-radius: 4px; display: flex; align-items: center; gap: 0.25rem; }
-.sc-dot { width: 7px; height: 7px; border-radius: 50%; }
-.sc-go { color: var(--green-go); background: rgba(34,197,94,0.1); }
-.sc-go .sc-dot { background: var(--green-go); }
-.sc-ca { color: var(--amber-caution); background: rgba(245,158,11,0.1); }
-.sc-ca .sc-dot { background: var(--amber-caution); }
-.sc-cx { color: var(--red-cancel); background: rgba(239,68,68,0.1); }
-.sc-cx .sc-dot { background: var(--red-cancel); }
+/* --- Top bar --- */
+.tbar { background:var(--ocean-mid); border-bottom:1px solid var(--border); padding:0 1rem; height:46px; display:flex; align-items:center; justify-content:space-between; gap:0.75rem; z-index:600; }
+.tbar-l { display:flex; align-items:center; gap:0.8rem; }
+.tbar-brand { font-weight:700; color:#fff; font-size:1rem; white-space:nowrap; }
+.pills { display:flex; gap:2px; background:var(--ocean-dark); border-radius:5px; padding:2px; }
+.pill { padding:0.25rem 0.65rem; border:none; background:transparent; color:var(--text-secondary); font-size:0.72rem; font-weight:600; border-radius:3px; cursor:pointer; transition:all 0.12s; font-family:inherit; white-space:nowrap; }
+.pill:hover { color:var(--text-primary); }
+.pill.on { background:var(--teal); color:#fff; }
+.tbar-r { display:flex; align-items:center; gap:0.6rem; }
+.counts { display:flex; gap:0.4rem; }
+.cnt { font-size:0.68rem; font-weight:600; padding:0.15rem 0.4rem; border-radius:3px; }
+.cnt-g { color:var(--green-go); background:rgba(34,197,94,0.1); }
+.cnt-c { color:var(--amber-caution); background:rgba(245,158,11,0.1); }
+.cnt-x { color:var(--red-cancel); background:rgba(239,68,68,0.1); }
+.grid-status { font-size:0.65rem; color:var(--text-secondary); white-space:nowrap; }
 
 /* --- Map --- */
-.map-wrap { flex: 1; position: relative; }
-#wmap { width: 100%; height: 100%; background: var(--ocean-dark); }
+.mwrap { flex:1; position:relative; overflow:hidden; }
+#wmap { width:100%; height:100%; background:var(--ocean-dark); }
 
-/* --- Time bar --- */
-.time-bar {
-    background: var(--ocean-mid); border-top: 1px solid var(--border);
-    padding: 0.45rem 1rem; display: flex; align-items: center; gap: 0.75rem; z-index: 500;
-}
-.tb-time { min-width: 140px; text-align: center; }
-.tb-date { font-size: 0.6rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.6px; }
-.tb-hour { font-size: 1.2rem; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
-.tb-sub { font-size: 0.6rem; color: var(--text-secondary); }
-.tb-btns { display: flex; gap: 3px; }
-.tb-btn {
-    width: 28px; height: 28px; border: 1px solid var(--border); background: var(--surface);
-    color: var(--text-secondary); border-radius: 4px; cursor: pointer;
-    display: flex; align-items: center; justify-content: center; font-size: 0.75rem;
-    transition: all 0.12s; font-family: inherit;
-}
-.tb-btn:hover { border-color: var(--teal); color: #fff; }
-.tb-btn.on { background: var(--teal); border-color: var(--teal); color: #fff; }
-.tb-slider { flex: 1; }
-.tb-range {
-    -webkit-appearance: none; appearance: none; width: 100%; height: 4px;
-    background: var(--surface-light); border-radius: 2px; outline: none; cursor: pointer;
-}
-.tb-range::-webkit-slider-thumb {
-    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
-    background: var(--teal); border: 2px solid #fff; cursor: pointer;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.4);
-}
-.tb-range::-moz-range-thumb {
-    width: 16px; height: 16px; border-radius: 50%;
-    background: var(--teal); border: 2px solid #fff; cursor: pointer;
-}
+/* --- Bottom time bar --- */
+.bbar { background:var(--ocean-mid); border-top:1px solid var(--border); padding:0.4rem 1rem; display:flex; align-items:center; gap:0.75rem; z-index:600; }
+.bbar-time { min-width:140px; text-align:center; }
+.bbar-date { font-size:0.58rem; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.6px; }
+.bbar-hour { font-size:1.15rem; font-weight:700; color:#fff; font-variant-numeric:tabular-nums; }
+.bbar-sub { font-size:0.58rem; color:var(--text-secondary); }
+.btns { display:flex; gap:3px; }
+.bbtn { width:28px; height:28px; border:1px solid var(--border); background:var(--surface); color:var(--text-secondary); border-radius:4px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:0.75rem; transition:all 0.1s; font-family:inherit; }
+.bbtn:hover { border-color:var(--teal); color:#fff; }
+.bbtn.on { background:var(--teal); border-color:var(--teal); color:#fff; }
+.bbar-slider { flex:1; }
+.rng { -webkit-appearance:none; appearance:none; width:100%; height:4px; background:var(--surface-light); border-radius:2px; outline:none; cursor:pointer; }
+.rng::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; border-radius:50%; background:var(--teal); border:2px solid #fff; cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,0.4); }
+.rng::-moz-range-thumb { width:16px; height:16px; border-radius:50%; background:var(--teal); border:2px solid #fff; cursor:pointer; }
+.speed-btn { font-size:0.62rem; padding:0.2rem 0.4rem; border:1px solid var(--border); background:var(--surface); color:var(--text-secondary); border-radius:3px; cursor:pointer; font-family:inherit; }
+.speed-btn:hover { color:#fff; border-color:var(--teal); }
 
-/* --- Legend overlay --- */
-.map-legend {
-    position: absolute; bottom: 12px; right: 12px; z-index: 450;
-    background: rgba(19,31,53,0.92); border: 1px solid var(--border);
-    border-radius: 6px; padding: 0.55rem 0.65rem; backdrop-filter: blur(6px);
-    min-width: 100px;
-}
-.ml-title { font-size: 0.62rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 0.35rem; }
-.ml-row { display: flex; align-items: center; gap: 0.35rem; margin: 0.1rem 0; }
-.ml-swatch { width: 16px; height: 9px; border-radius: 2px; }
-.ml-label { font-size: 0.62rem; color: var(--text-secondary); }
+/* --- Legend --- */
+.lgnd { position:absolute; bottom:12px; right:12px; z-index:450; background:rgba(19,31,53,0.92); border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.6rem; backdrop-filter:blur(6px); min-width:95px; }
+.lgnd-t { font-size:0.6rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.7px; margin-bottom:0.3rem; }
+.lgnd-r { display:flex; align-items:center; gap:0.3rem; margin:0.08rem 0; }
+.lgnd-s { width:16px; height:8px; border-radius:2px; }
+.lgnd-l { font-size:0.6rem; color:var(--text-secondary); }
 
 /* --- Loading --- */
-.map-load { position: absolute; inset: 0; background: rgba(10,22,40,0.88); display: flex; align-items: center; justify-content: center; z-index: 1000; transition: opacity 0.4s; }
-.map-load.done { opacity: 0; pointer-events: none; }
-.ml-spin { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--teal); border-radius: 50%; animation: sp 0.7s linear infinite; }
-@keyframes sp { to { transform: rotate(360deg); } }
-.ml-txt { color: var(--text-secondary); font-size: 0.8rem; margin-top: 0.6rem; }
+.mload { position:absolute; inset:0; background:rgba(10,22,40,0.9); display:flex; align-items:center; justify-content:center; z-index:1000; transition:opacity 0.5s; flex-direction:column; gap:0.8rem; }
+.mload.done { opacity:0; pointer-events:none; }
+.mload-bar { width:200px; height:6px; background:var(--surface-light); border-radius:3px; overflow:hidden; }
+.mload-fill { height:100%; background:var(--teal); border-radius:3px; width:0%; transition:width 0.3s; }
+.mload-txt { color:var(--text-secondary); font-size:0.78rem; text-align:center; }
 
 /* --- Leaflet dark --- */
-.leaflet-container { background: var(--ocean-dark); font-family: inherit; }
-.leaflet-control-attribution { background: rgba(10,22,40,0.8) !important; color: var(--text-secondary) !important; font-size: 0.6rem !important; }
-.leaflet-control-attribution a { color: var(--teal) !important; }
-.leaflet-control-zoom a { background: var(--surface) !important; color: var(--text-primary) !important; border-color: var(--border) !important; }
+.leaflet-container { background:var(--ocean-dark); font-family:inherit; }
+.leaflet-control-attribution { background:rgba(10,22,40,0.8)!important; color:var(--text-secondary)!important; font-size:0.58rem!important; }
+.leaflet-control-attribution a { color:var(--teal)!important; }
+.leaflet-control-zoom a { background:var(--surface)!important; color:var(--text-primary)!important; border-color:var(--border)!important; }
 
 /* --- Markers --- */
-.sm { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 2px solid rgba(255,255,255,0.5); box-shadow: 0 2px 6px rgba(0,0,0,0.4); transition: all 0.25s; }
-.sm:hover { transform: rotate(-45deg) scale(1.15); }
-.sm-i { transform: rotate(45deg); font-size: 11px; font-weight: 700; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.3); }
-.sm-go { background: linear-gradient(135deg,#22c55e,#16a34a); }
-.sm-ca { background: linear-gradient(135deg,#f59e0b,#d97706); }
-.sm-cx { background: linear-gradient(135deg,#ef4444,#dc2626); animation: pcx 2s ease-in-out infinite; }
-.sm-pn { background: linear-gradient(135deg,#64748b,#475569); border-color: rgba(255,255,255,0.3); }
-@keyframes pcx { 0%,100% { box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 0 6px rgba(239,68,68,0); } }
+.sm { display:flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); border:2px solid rgba(255,255,255,0.6); box-shadow:0 2px 6px rgba(0,0,0,0.5); transition:all 0.25s; }
+.sm:hover { transform:rotate(-45deg) scale(1.15); }
+.sm-i { transform:rotate(45deg); font-size:10px; font-weight:700; color:#fff; text-shadow:0 1px 2px rgba(0,0,0,0.4); }
+.sm-go { background:linear-gradient(135deg,#22c55e,#16a34a); }
+.sm-ca { background:linear-gradient(135deg,#f59e0b,#d97706); }
+.sm-cx { background:linear-gradient(135deg,#ef4444,#dc2626); animation:pcx 2s ease-in-out infinite; }
+.sm-pn { background:linear-gradient(135deg,#64748b,#475569); border-color:rgba(255,255,255,0.3); }
+@keyframes pcx { 0%,100%{box-shadow:0 2px 6px rgba(0,0,0,0.5),0 0 0 0 rgba(239,68,68,0.4);} 50%{box-shadow:0 2px 6px rgba(0,0,0,0.5),0 0 0 6px rgba(239,68,68,0);} }
 
 /* --- Popups --- */
-.leaflet-popup-content-wrapper { background: var(--surface) !important; border: 1px solid var(--border) !important; border-radius: 8px !important; box-shadow: 0 8px 24px rgba(0,0,0,0.5) !important; color: var(--text-primary) !important; padding: 0 !important; }
-.leaflet-popup-content { margin: 0 !important; min-width: 240px; }
-.leaflet-popup-tip { background: var(--surface) !important; border: 1px solid var(--border) !important; }
-.leaflet-popup-close-button { color: var(--text-secondary) !important; font-size: 18px !important; padding: 4px 6px !important; }
+.leaflet-popup-content-wrapper { background:var(--surface)!important; border:1px solid var(--border)!important; border-radius:8px!important; box-shadow:0 8px 24px rgba(0,0,0,0.5)!important; color:var(--text-primary)!important; padding:0!important; }
+.leaflet-popup-content { margin:0!important; min-width:230px; }
+.leaflet-popup-tip { background:var(--surface)!important; border:1px solid var(--border)!important; }
+.leaflet-popup-close-button { color:var(--text-secondary)!important; font-size:18px!important; padding:4px 6px!important; }
+.pp-hd { padding:0.6rem 0.8rem; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+.pp-nm { font-weight:700; color:#fff; font-size:0.88rem; }
+.pp-sub { font-size:0.68rem; color:var(--text-secondary); }
+.pp-bg { padding:0.12rem 0.4rem; border-radius:3px; font-size:0.62rem; font-weight:700; text-transform:uppercase; }
+.pp-bgo { background:rgba(34,197,94,0.15); color:var(--green-go); }
+.pp-bca { background:rgba(245,158,11,0.15); color:var(--amber-caution); }
+.pp-bcx { background:rgba(239,68,68,0.15); color:var(--red-cancel); }
+.pp-bpn { background:rgba(148,163,184,0.15); color:var(--text-secondary); }
+.pp-bd { padding:0.6rem 0.8rem; }
+.pp-gr { display:grid; grid-template-columns:1fr 1fr; gap:0.35rem 0.9rem; }
+.pp-sl { font-size:0.58rem; text-transform:uppercase; letter-spacing:0.4px; color:var(--text-secondary); font-weight:600; }
+.pp-sv { font-size:0.88rem; font-weight:700; color:#fff; }
+.pp-ft { font-size:0.62rem; color:var(--text-secondary); padding-top:0.45rem; margin-top:0.45rem; border-top:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+.pp-lk { display:inline-block; padding:0.18rem 0.45rem; background:var(--teal); color:#fff!important; border-radius:3px; font-size:0.62rem; font-weight:600; text-decoration:none!important; }
 
-.pp { padding: 0; }
-.pp-hd { padding: 0.65rem 0.85rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-.pp-name { font-weight: 700; color: #fff; font-size: 0.9rem; }
-.pp-sub { font-size: 0.7rem; color: var(--text-secondary); }
-.pp-badge { padding: 0.12rem 0.45rem; border-radius: 4px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; }
-.pp-go { background: rgba(34,197,94,0.15); color: var(--green-go); }
-.pp-ca { background: rgba(245,158,11,0.15); color: var(--amber-caution); }
-.pp-cx { background: rgba(239,68,68,0.15); color: var(--red-cancel); }
-.pp-pn { background: rgba(148,163,184,0.15); color: var(--text-secondary); }
-.pp-bd { padding: 0.65rem 0.85rem; }
-.pp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem 1rem; }
-.pp-sl { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-secondary); font-weight: 600; }
-.pp-sv { font-size: 0.9rem; font-weight: 700; color: #fff; }
-.pp-ft { font-size: 0.65rem; color: var(--text-secondary); padding-top: 0.5rem; margin-top: 0.5rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-.pp-link { display: inline-block; padding: 0.2rem 0.5rem; background: var(--teal); color: #fff !important; border-radius: 4px; font-size: 0.65rem; font-weight: 600; text-decoration: none !important; }
+.marker-cluster-small,.marker-cluster-medium,.marker-cluster-large { background:rgba(14,165,233,0.2)!important; }
+.marker-cluster-small div,.marker-cluster-medium div,.marker-cluster-large div { background:var(--teal)!important; color:#fff!important; font-weight:700!important; }
 
-/* Cluster */
-.marker-cluster-small,.marker-cluster-medium,.marker-cluster-large { background: rgba(14,165,233,0.2) !important; }
-.marker-cluster-small div,.marker-cluster-medium div,.marker-cluster-large div { background: var(--teal) !important; color: #fff !important; font-weight: 700 !important; }
-
-@media (max-width: 768px) {
-    .var-bar { padding: 0.35rem 0.6rem; }
-    .var-bar-title { display: none; }
-    .site-counts { display: none; }
-    .time-bar { padding: 0.35rem 0.6rem; gap: 0.5rem; }
-    .tb-time { min-width: 100px; }
-    .tb-hour { font-size: 1rem; }
+@media(max-width:768px) {
+    .tbar-brand { display:none; }
+    .counts { display:none; }
+    .grid-status { display:none; }
+    .bbar-time { min-width:95px; }
+    .bbar-hour { font-size:0.95rem; }
 }
 </style>
 {% endblock %}
@@ -155,52 +116,51 @@
 {% block content %}
 <div class="map-app">
 
-    <div class="var-bar">
-        <div class="var-bar-left">
-            <span class="var-bar-title">🗺️ Weather Map</span>
-            <div class="var-pills" id="vpills">
-                <button class="var-pill active" data-v="risk">Risk</button>
-                <button class="var-pill" data-v="wind">Wind</button>
-                <button class="var-pill" data-v="gust">Gusts</button>
-                <button class="var-pill" data-v="precip">Precip</button>
-                <button class="var-pill" data-v="temp">Temp</button>
+    <div class="tbar">
+        <div class="tbar-l">
+            <span class="tbar-brand">🗺️ Weather Map</span>
+            <div class="pills" id="pills">
+                <button class="pill on" data-v="risk">Risk</button>
+                <button class="pill" data-v="wind">Wind</button>
+                <button class="pill" data-v="gust">Gusts</button>
+                <button class="pill" data-v="precip">Precip</button>
+                <button class="pill" data-v="temp">Temp</button>
             </div>
         </div>
-        <div class="var-bar-right">
-            <div class="site-counts" id="scounts">
-                {% if go_count %}<span class="sc sc-go"><span class="sc-dot"></span>{{ go_count }} GO</span>{% endif %}
-                {% if caution_count %}<span class="sc sc-ca"><span class="sc-dot"></span>{{ caution_count }} CAUTION</span>{% endif %}
-                {% if cancel_count %}<span class="sc sc-cx"><span class="sc-dot"></span>{{ cancel_count }} CANCEL</span>{% endif %}
+        <div class="tbar-r">
+            <div class="counts">
+                {% if go_count %}<span class="cnt cnt-g">{{ go_count }} GO</span>{% endif %}
+                {% if caution_count %}<span class="cnt cnt-c">{{ caution_count }} CAUTION</span>{% endif %}
+                {% if cancel_count %}<span class="cnt cnt-x">{{ cancel_count }} CANCEL</span>{% endif %}
             </div>
+            <span class="grid-status" id="gstatus"></span>
         </div>
     </div>
 
-    <div class="map-wrap">
+    <div class="mwrap">
         <div id="wmap"></div>
-        <div class="map-legend" id="legend"></div>
-        <div class="map-load" id="mload">
-            <div style="text-align:center">
-                <div class="ml-spin"></div>
-                <div class="ml-txt">Loading forecast data…</div>
-            </div>
+        <div class="lgnd" id="lgnd"></div>
+        <div class="mload" id="mload">
+            <div class="mload-bar"><div class="mload-fill" id="mfill"></div></div>
+            <div class="mload-txt" id="mtxt">Fetching UK weather grid…</div>
         </div>
     </div>
 
-    <div class="time-bar">
-        <div class="tb-time">
-            <div class="tb-date" id="tdate">—</div>
-            <div class="tb-hour" id="thour">Latest</div>
-            <div class="tb-sub" id="tsub">Peak summary</div>
+    <div class="bbar">
+        <div class="bbar-time">
+            <div class="bbar-date" id="bdate">—</div>
+            <div class="bbar-hour" id="bhour">Loading</div>
+            <div class="bbar-sub" id="bsub"></div>
         </div>
-        <div class="tb-btns">
-            <button class="tb-btn" id="bback">◀</button>
-            <button class="tb-btn" id="bplay">▶</button>
-            <button class="tb-btn" id="bfwd">▶</button>
-            <button class="tb-btn" id="blive" title="Back to summary">⟲</button>
+        <div class="btns">
+            <button class="bbtn" id="bback" title="Step back">◀</button>
+            <button class="bbtn" id="bplay" title="Play/Pause">▶</button>
+            <button class="bbtn" id="bfwd" title="Step forward">▶</button>
         </div>
-        <div class="tb-slider">
-            <input type="range" class="tb-range" id="tslider" min="0" max="0" value="0" step="1">
+        <div class="bbar-slider">
+            <input type="range" class="rng" id="rng" min="0" max="0" value="0" step="1">
         </div>
+        <button class="speed-btn" id="speedbtn" title="Playback speed">1×</button>
     </div>
 
 </div>
@@ -213,310 +173,397 @@
 (function(){
 'use strict';
 
-// ================================================================
-// URLS
-// ================================================================
-var SUMMARY_URL = '{% url "dashboard:map_sites_json" %}';
-var HOURLY_URL  = '{% url "dashboard:map_sites_hourly_json" %}';
+/* ================================================================
+   CONFIG
+   ================================================================ */
+var SITE_URL  = '{% url "dashboard:map_sites_json" %}';
+var HOUR_URL  = '{% url "dashboard:map_sites_hourly_json" %}';
 
-// ================================================================
-// RISK CALC — mirrors core.py exactly
-// ================================================================
-function ramp(v, soft, hard, highBad) {
-    if (highBad) { if (v<=soft) return 0; if (v>=hard) return 1; return (v-soft)/(hard-soft); }
-    else         { if (v>=soft) return 0; if (v<=hard) return 1; return (soft-v)/(soft-hard); }
-}
-function sigmoid(x) { return 1/(1+Math.exp(-x)); }
-function calcRisk(w,g,p,t) {
-    var r = 0.30*ramp(w,10,14,true) + 0.40*ramp(g,15,20,true) + 0.20*ramp(p,0.7,2,true) + 0.10*ramp(t,1,-2,false);
-    return Math.min(100, Math.max(0, sigmoid(6*(r-0.45))*100));
-}
-function recFromRisk(r) { return r<20?'GO':r<50?'CAUTION':'CANCEL'; }
+// UK grid — 0.25° gives ~1500 pts, good balance of detail vs load time
+var G_LAT0=49.75, G_LAT1=59.0, G_LON0=-8.0, G_LON1=2.25, G_STEP=0.25;
 
-// ================================================================
-// COLOUR SCALES
-// ================================================================
-var SCALES = {
-    risk:   { title:'Risk %',     unit:'%',    stops:[[0,[34,197,94],'0'],[20,[34,197,94],'20'],[35,[245,158,11],'35'],[50,[245,158,11],'50'],[70,[239,68,68],'70'],[100,[185,28,28],'100']] },
-    wind:   { title:'Wind m/s',   unit:' m/s', stops:[[0,[59,130,246],'0'],[5,[34,197,94],'5'],[10,[245,158,11],'10'],[15,[239,68,68],'15'],[25,[185,28,28],'25+']] },
-    gust:   { title:'Gusts m/s',  unit:' m/s', stops:[[0,[59,130,246],'0'],[8,[34,197,94],'8'],[15,[245,158,11],'15'],[20,[239,68,68],'20'],[35,[185,28,28],'35+']] },
-    precip: { title:'Precip mm/h',unit:' mm',  stops:[[0,[100,116,139],'0'],[0.2,[96,165,250],'0.2'],[1,[59,130,246],'1'],[3,[37,99,235],'3'],[8,[29,78,216],'8+']] },
-    temp:   { title:'Temp °C',    unit:'°C',   stops:[[-5,[96,165,250],'-5'],[0,[147,197,253],'0'],[5,[254,240,138],'5'],[15,[251,191,36],'15'],[25,[239,68,68],'25+']] }
+/* ================================================================
+   RISK CALC — exact mirror of core.py
+   ================================================================ */
+function ramp(v,s,h,hb){
+    if(hb){if(v<=s)return 0;if(v>=h)return 1;return(v-s)/(h-s);}
+    else{if(v>=s)return 0;if(v<=h)return 1;return(s-v)/(s-h);}
+}
+function sig(x){return 1/(1+Math.exp(-x));}
+function cRisk(w,g,p,t){
+    var r=.30*ramp(w,10,14,1)+.40*ramp(g,15,20,1)+.20*ramp(p,.7,2,1)+.10*ramp(t,1,-2,0);
+    return Math.min(100,Math.max(0,sig(6*(r-.45))*100));
+}
+function recOf(r){return r<20?'GO':r<50?'CAUTION':'CANCEL';}
+
+/* ================================================================
+   COLOUR SCALES
+   ================================================================ */
+var SC={
+    risk:  {t:'Risk %',    u:'%',    s:[[0,[34,197,94],'0'],[20,[34,197,94],'20'],[35,[245,158,11],'35'],[50,[245,158,11],'50'],[70,[239,68,68],'70'],[100,[185,28,28],'100']]},
+    wind:  {t:'Wind m/s',  u:' m/s', s:[[0,[51,65,85],'0'],[3,[59,130,246],'3'],[7,[34,197,94],'7'],[10,[245,158,11],'10'],[15,[239,68,68],'15'],[25,[185,28,28],'25+']]},
+    gust:  {t:'Gusts m/s', u:' m/s', s:[[0,[51,65,85],'0'],[5,[59,130,246],'5'],[10,[34,197,94],'10'],[15,[245,158,11],'15'],[20,[239,68,68],'20'],[35,[185,28,28],'35+']]},
+    precip:{t:'Precip mm/h',u:' mm', s:[[0,[30,41,59],'0'],[0.1,[96,165,250],'0.1'],[0.5,[59,130,246],'0.5'],[1,[37,99,235],'1'],[3,[29,78,216],'3'],[8,[67,56,202],'8+']]},
+    temp:  {t:'Temp °C',   u:'°C',   s:[[-10,[37,99,235],'-10'],[-2,[96,165,250],'-2'],[2,[147,197,253],'2'],[8,[254,240,138],'8'],[15,[251,191,36],'15'],[25,[239,68,68],'25+']]}
 };
-
-function lerp(a,b,t) { return [Math.round(a[0]+t*(b[0]-a[0])), Math.round(a[1]+t*(b[1]-a[1])), Math.round(a[2]+t*(b[2]-a[2]))]; }
-function valToRgb(val, key) {
-    var s = SCALES[key].stops;
-    if (val<=s[0][0]) return s[0][1];
-    if (val>=s[s.length-1][0]) return s[s.length-1][1];
-    for (var i=0;i<s.length-1;i++) {
-        if (val>=s[i][0] && val<=s[i+1][0]) {
-            var t=(val-s[i][0])/(s[i+1][0]-s[i][0]);
-            return lerp(s[i][1],s[i+1][1],t);
-        }
-    }
+function lerp3(a,b,t){return[a[0]+t*(b[0]-a[0])|0,a[1]+t*(b[1]-a[1])|0,a[2]+t*(b[2]-a[2])|0];}
+function toRgb(val,k){
+    var s=SC[k].s;
+    if(val<=s[0][0])return s[0][1]; if(val>=s[s.length-1][0])return s[s.length-1][1];
+    for(var i=0;i<s.length-1;i++){if(val>=s[i][0]&&val<=s[i+1][0]){var t=(val-s[i][0])/(s[i+1][0]-s[i][0]);return lerp3(s[i][1],s[i+1][1],t);}}
     return s[s.length-1][1];
 }
-function rgb(c,a) { return 'rgba('+c[0]+','+c[1]+','+c[2]+','+(a||1)+')'; }
 
-// ================================================================
-// MAP
-// ================================================================
-var map = L.map('wmap', { center:[54.5,-2.5], zoom:6, maxBounds:[[47,-15],[62,8]], minZoom:5, maxZoom:14 });
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    attribution:'&copy; OSM &copy; CARTO', subdomains:'abcd', maxZoom:20
-}).addTo(map);
+/* ================================================================
+   MAP
+   ================================================================ */
+var map=L.map('wmap',{center:[54.5,-2.5],zoom:6,maxBounds:[[46,-15],[62,8]],minZoom:5,maxZoom:14});
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'&copy; OSM &copy; CARTO',subdomains:'abcd',maxZoom:20}).addTo(map);
 
-var markers = L.markerClusterGroup({ maxClusterRadius:30, disableClusteringAtZoom:9, showCoverageOnHover:false, zoomToBoundsOnClick:true });
-map.addLayer(markers);
+/* ================================================================
+   CANVAS OVERLAY for weather field
+   ================================================================ */
+var WeatherCanvas=L.Layer.extend({
+    onAdd:function(m){
+        this._map=m;
+        this._el=L.DomUtil.create('canvas','');
+        this._el.style.position='absolute'; this._el.style.pointerEvents='none';
+        this._el.style.zIndex='200';
+        m.getPanes().overlayPane.appendChild(this._el);
+        m.on('moveend zoomend resize',this._reset,this);
+        this._reset();
+    },
+    onRemove:function(m){
+        L.DomUtil.remove(this._el);
+        m.off('moveend zoomend resize',this._reset,this);
+    },
+    _reset:function(){
+        var sz=this._map.getSize();
+        this._el.width=sz.x; this._el.height=sz.y;
+        var tl=this._map.containerPointToLayerPoint([0,0]);
+        L.DomUtil.setPosition(this._el,tl);
+        this.draw();
+    },
+    draw:function(){
+        if(!gridStore||!gridStore.length||gridTimestamps.length===0)return;
+        var ctx=this._el.getContext('2d');
+        ctx.clearRect(0,0,this._el.width,this._el.height);
+        var m=this._map, z=m.getZoom();
+        var ti=curIdx;
 
-// ================================================================
-// STATE
-// ================================================================
-var summaryGJ = null;   // GeoJSON from sites.json
-var hourlyD = null;     // {timestamps:[], frames:{}}
-var mode = 'summary';   // 'summary' | 'hourly'
-var curIdx = 0;
-var curVar = 'risk';
-var playTmr = null;
+        // Adaptive cell padding for smoother look at higher zoom
+        var pad=z>=8?0.02:z>=7?0.01:0;
+        var halfStep=G_STEP/2+pad;
 
-var $slider = document.getElementById('tslider');
-var $tdate  = document.getElementById('tdate');
-var $thour  = document.getElementById('thour');
-var $tsub   = document.getElementById('tsub');
+        for(var i=0;i<gridStore.length;i++){
+            var pt=gridStore[i];
+            var dat=pt.d;
+            if(ti>=dat.length)continue;
+            var h=dat[ti];
+            var val;
+            if(curVar==='risk') val=cRisk(h[0],h[1],h[2],h[3]);
+            else if(curVar==='wind') val=h[0];
+            else if(curVar==='gust') val=h[1];
+            else if(curVar==='precip') val=h[2];
+            else val=h[3]; // temp
 
-// ================================================================
-// MARKER FACTORY
-// ================================================================
-function mkIcon(rec) {
-    var cls = rec==='GO'?'sm-go':rec==='CAUTION'?'sm-ca':rec==='CANCEL'?'sm-cx':'sm-pn';
-    var lbl = rec==='PENDING'?'?':rec.charAt(0);
-    return L.divIcon({ className:'', iconSize:[28,28], iconAnchor:[14,28], popupAnchor:[0,-24],
-        html:'<div class="sm '+cls+'"><span class="sm-i">'+lbl+'</span></div>' });
+            // Skip very low precip for cleaner look
+            if(curVar==='precip'&&val<0.05)continue;
+
+            var c=toRgb(val,curVar);
+            var nw=m.latLngToContainerPoint([pt.lat+halfStep,pt.lon-halfStep]);
+            var se=m.latLngToContainerPoint([pt.lat-halfStep,pt.lon+halfStep]);
+            var w=se.x-nw.x, ht=se.y-nw.y;
+            if(nw.x>this._el.width||se.x<0||nw.y>this._el.height||se.y<0)continue;
+
+            var opacity=curVar==='precip'?Math.min(0.7,0.15+val*0.18):0.55;
+            ctx.fillStyle='rgba('+c[0]+','+c[1]+','+c[2]+','+opacity+')';
+            ctx.fillRect(nw.x,nw.y,w,ht);
+        }
+    }
+});
+var wxCanvas=new WeatherCanvas();
+map.addLayer(wxCanvas);
+
+/* ================================================================
+   SITE MARKERS
+   ================================================================ */
+var siteCluster=L.markerClusterGroup({maxClusterRadius:28,disableClusteringAtZoom:9,showCoverageOnHover:false});
+map.addLayer(siteCluster);
+
+function mkI(rec){
+    var c=rec==='GO'?'sm-go':rec==='CAUTION'?'sm-ca':rec==='CANCEL'?'sm-cx':'sm-pn';
+    var l=rec==='PENDING'?'?':rec.charAt(0);
+    return L.divIcon({className:'',iconSize:[26,26],iconAnchor:[13,26],popupAnchor:[0,-22],
+        html:'<div class="sm '+c+'"><span class="sm-i">'+l+'</span></div>'});
 }
+function fv(v,u){return v!=null?v+u:'—';}
+function bcls(r){return r==='GO'?'pp-bgo':r==='CAUTION'?'pp-bca':r==='CANCEL'?'pp-bcx':'pp-bpn';}
 
-function fv(v,u) { return v!=null?v+u:'—'; }
-
-function summaryPopup(p) {
-    var rec=p.recommendation||'PENDING';
-    var bc=rec==='GO'?'pp-go':rec==='CAUTION'?'pp-ca':rec==='CANCEL'?'pp-cx':'pp-pn';
-    var body='';
-    if (p.has_forecast) {
-        body='<div class="pp-grid">'+
+function popSum(p){
+    var r=p.recommendation||'PENDING';
+    var bd='';
+    if(p.has_forecast){
+        bd='<div class="pp-gr">'+
             '<div><span class="pp-sl">Peak Risk</span><div class="pp-sv">'+fv(p.peak_risk,'%')+'</div></div>'+
             '<div><span class="pp-sl">Peak Wind</span><div class="pp-sv">'+fv(p.peak_wind,' m/s')+'</div></div>'+
             '<div><span class="pp-sl">Peak Gust</span><div class="pp-sv">'+fv(p.peak_gust,' m/s')+'</div></div>'+
-            '<div><span class="pp-sl">Precipitation</span><div class="pp-sv">'+fv(p.peak_precip,' mm/h')+'</div></div>'+
+            '<div><span class="pp-sl">Precip</span><div class="pp-sv">'+fv(p.peak_precip,' mm/h')+'</div></div>'+
             '<div><span class="pp-sl">Min Temp</span><div class="pp-sv">'+fv(p.min_temp,'°C')+'</div></div>'+
-            '<div><span class="pp-sl">Exposure</span><div class="pp-sv">'+(p.exposure||'—')+'</div></div>'+
-            '</div>';
-        var dt='';
-        if(p.forecast_date){var d=new Date(p.forecast_date+'T00:00:00');dt=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});}
-        body+='<div class="pp-ft"><span>'+dt+'</span><a href="/dashboard/site/'+p.id+'/" class="pp-link">Full Forecast →</a></div>';
+            '<div><span class="pp-sl">Exposure</span><div class="pp-sv">'+(p.exposure||'—')+'</div></div></div>';
+        var dt=''; if(p.forecast_date){var d=new Date(p.forecast_date+'T00:00');dt=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});}
+        bd+='<div class="pp-ft"><span>'+dt+'</span><a href="/dashboard/site/'+p.id+'/" class="pp-lk">Full Forecast →</a></div>';
     } else {
-        body='<div style="text-align:center;padding:0.5rem 0;color:var(--text-secondary)">No forecast data yet</div>'+
-             '<div class="pp-ft"><span>&nbsp;</span><a href="/dashboard/site/'+p.id+'/" class="pp-link">View Site →</a></div>';
+        bd='<div style="text-align:center;padding:0.4rem 0;color:var(--text-secondary);font-size:0.8rem">No forecast yet</div><div class="pp-ft"><span></span><a href="/dashboard/site/'+p.id+'/" class="pp-lk">View →</a></div>';
     }
-    return '<div class="pp"><div class="pp-hd"><div><div class="pp-name">'+p.name+'</div><div class="pp-sub">'+p.client+' · '+p.postcode+'</div></div>'+
-           '<span class="pp-badge '+bc+'">'+rec+'</span></div><div class="pp-bd">'+body+'</div></div>';
+    return '<div class="pp-hd"><div><div class="pp-nm">'+p.name+'</div><div class="pp-sub">'+p.client+' · '+p.postcode+'</div></div><span class="pp-bg '+bcls(r)+'">'+r+'</span></div><div class="pp-bd">'+bd+'</div>';
 }
 
-function hourlyPopup(p, ts) {
-    var rec=p.recommendation||'PENDING';
-    var bc=rec==='GO'?'pp-go':rec==='CAUTION'?'pp-ca':rec==='CANCEL'?'pp-cx':'pp-pn';
+function popHr(p,ts){
+    var risk=cRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
+    var r=recOf(risk);
     var d=new Date(ts);
     var tm=d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' UTC';
     var dt=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
-    // Calculate risk client-side from the hourly values
-    var risk=calcRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
-    return '<div class="pp"><div class="pp-hd"><div><div class="pp-name">'+p.name+'</div><div class="pp-sub">'+p.client+' · '+p.postcode+'</div></div>'+
-           '<span class="pp-badge '+bc+'">'+rec+'</span></div><div class="pp-bd"><div class="pp-grid">'+
-           '<div><span class="pp-sl">Risk</span><div class="pp-sv">'+risk.toFixed(0)+'%</div></div>'+
-           '<div><span class="pp-sl">Wind</span><div class="pp-sv">'+p.wind_speed+' m/s</div></div>'+
-           '<div><span class="pp-sl">Gusts</span><div class="pp-sv">'+p.wind_gusts+' m/s</div></div>'+
-           '<div><span class="pp-sl">Precip</span><div class="pp-sv">'+p.precipitation+' mm</div></div>'+
-           '<div><span class="pp-sl">Temp</span><div class="pp-sv">'+p.temperature+'°C</div></div>'+
-           '<div><span class="pp-sl">Time</span><div class="pp-sv">'+tm+'</div></div>'+
-           '</div><div class="pp-ft"><span>'+dt+'</span><a href="/dashboard/site/'+p.id+'/" class="pp-link">Full Forecast →</a></div></div></div>';
+    return '<div class="pp-hd"><div><div class="pp-nm">'+p.name+'</div><div class="pp-sub">'+p.client+' · '+p.postcode+'</div></div><span class="pp-bg '+bcls(r)+'">'+r+'</span></div>'+
+        '<div class="pp-bd"><div class="pp-gr">'+
+        '<div><span class="pp-sl">Risk</span><div class="pp-sv">'+risk.toFixed(0)+'%</div></div>'+
+        '<div><span class="pp-sl">Wind</span><div class="pp-sv">'+p.wind_speed+' m/s</div></div>'+
+        '<div><span class="pp-sl">Gusts</span><div class="pp-sv">'+p.wind_gusts+' m/s</div></div>'+
+        '<div><span class="pp-sl">Precip</span><div class="pp-sv">'+p.precipitation+' mm</div></div>'+
+        '<div><span class="pp-sl">Temp</span><div class="pp-sv">'+p.temperature+'°C</div></div>'+
+        '<div><span class="pp-sl">Time</span><div class="pp-sv">'+tm+'</div></div></div>'+
+        '<div class="pp-ft"><span>'+dt+'</span><a href="/dashboard/site/'+p.id+'/" class="pp-lk">Full Forecast →</a></div></div>';
 }
 
-// ================================================================
-// GET VALUE FOR CURRENT VARIABLE
-// ================================================================
-function getVal(p, isHourly) {
-    if (curVar==='risk') {
-        if (isHourly) return calcRisk(p.wind_speed, p.wind_gusts, p.precipitation, p.temperature);
-        return p.peak_risk||0;
+/* ================================================================
+   STATE
+   ================================================================ */
+var gridStore=[];        // [{lat,lon,d:[[w,g,p,t],...]}]
+var gridTimestamps=[];   // ISO strings
+var siteGJ=null;         // summary GeoJSON
+var hourlyD=null;        // {timestamps,frames}
+var curIdx=0;
+var curVar='risk';
+var playTmr=null;
+var playSpeeds=[500,300,150,750];
+var playSpeedIdx=0;
+
+var $rng=document.getElementById('rng');
+var $bdate=document.getElementById('bdate');
+var $bhour=document.getElementById('bhour');
+var $bsub=document.getElementById('bsub');
+
+/* ================================================================
+   GRID FETCH — batched from Open-Meteo
+   ================================================================ */
+function buildGridPts(){
+    var pts=[];
+    for(var la=G_LAT0;la<=G_LAT1;la+=G_STEP)
+        for(var lo=G_LON0;lo<=G_LON1;lo+=G_STEP)
+            pts.push({lat:Math.round(la*1000)/1000,lon:Math.round(lo*1000)/1000});
+    return pts;
+}
+
+function fetchBatch(pts){
+    var lats=pts.map(function(p){return p.lat;}).join(',');
+    var lons=pts.map(function(p){return p.lon;}).join(',');
+    return fetch('https://api.open-meteo.com/v1/forecast?latitude='+lats+'&longitude='+lons+
+        '&hourly=wind_speed_10m,wind_gusts_10m,precipitation,temperature_2m&wind_speed_unit=ms&timezone=UTC&forecast_days=3')
+        .then(function(r){return r.json();});
+}
+
+function processResp(data,pts){
+    var arr=Array.isArray(data)?data:[data];
+    for(var i=0;i<arr.length&&i<pts.length;i++){
+        var r=arr[i];
+        if(!r||!r.hourly||!r.hourly.time)continue;
+        if(gridTimestamps.length===0) gridTimestamps=r.hourly.time;
+        var w=r.hourly.wind_speed_10m||[], g=r.hourly.wind_gusts_10m||[],
+            p=r.hourly.precipitation||[], t=r.hourly.temperature_2m||[];
+        var d=[];
+        for(var j=0;j<r.hourly.time.length;j++){
+            d.push([
+                w[j]!=null?w[j]:0, g[j]!=null?g[j]:0,
+                p[j]!=null?p[j]:0, t[j]!=null?t[j]:10
+            ]);
+        }
+        gridStore.push({lat:pts[i].lat, lon:pts[i].lon, d:d});
     }
-    if (curVar==='wind')   return isHourly ? p.wind_speed : (p.peak_wind||0);
-    if (curVar==='gust')   return isHourly ? p.wind_gusts : (p.peak_gust||0);
-    if (curVar==='precip') return isHourly ? p.precipitation : (p.peak_precip||0);
-    if (curVar==='temp')   return isHourly ? p.temperature : (p.min_temp||10);
-    return 0;
 }
 
-// ================================================================
-// RENDER — SUMMARY
-// ================================================================
-function renderSummary() {
-    mode='summary';
-    markers.clearLayers();
-    if (!summaryGJ||!summaryGJ.features) return;
-    summaryGJ.features.forEach(function(f){
-        var c=f.geometry.coordinates, p=f.properties;
-        var rec=p.recommendation||'PENDING';
-        var m=L.marker([c[1],c[0]],{icon:mkIcon(rec)});
-        m.bindPopup(summaryPopup(p),{maxWidth:300,minWidth:240});
+function loadGrid(){
+    var pts=buildGridPts();
+    var total=pts.length, done=0;
+    var $fill=document.getElementById('mfill');
+    var $txt=document.getElementById('mtxt');
+    var batches=[];
+    var batchSize=12; // Open-Meteo handles 12 well
+    for(var i=0;i<pts.length;i+=batchSize) batches.push(pts.slice(i,i+batchSize));
 
-        // Add a circle showing the selected variable's value
-        var val=getVal(p,false);
-        var clr=valToRgb(val,curVar);
-        L.circleMarker([c[1],c[0]],{radius:getRadius(val),color:'transparent',fillColor:rgb(clr,0.5),fillOpacity:1,interactive:false}).addTo(markers);
-        markers.addLayer(m);
+    var chain=Promise.resolve();
+    batches.forEach(function(batch,bi){
+        chain=chain.then(function(){
+            return fetchBatch(batch).then(function(data){
+                processResp(data,batch);
+                done+=batch.length;
+                var pct=Math.round(done/total*100);
+                $fill.style.width=pct+'%';
+                $txt.textContent='Loading weather grid… '+done+'/'+total+' ('+pct+'%)';
+                document.getElementById('gstatus').textContent=done+'/'+total+' grid pts';
+            }).catch(function(e){
+                console.warn('Batch '+bi+' fail:',e);
+                done+=batch.length;
+            });
+        }).then(function(){
+            return new Promise(function(ok){setTimeout(ok,80);});
+        });
     });
-    $tdate.textContent='—'; $thour.textContent='Latest'; $tsub.textContent='Peak summary';
+    return chain;
 }
 
-function getRadius(val) {
-    // Scale radius by variable
-    if (curVar==='risk') return 8+val*0.22;
-    if (curVar==='wind'||curVar==='gust') return 8+val*0.8;
-    if (curVar==='precip') return 8+val*4;
-    if (curVar==='temp') return 14;
-    return 12;
+/* ================================================================
+   SITE DATA
+   ================================================================ */
+function loadSites(){
+    return fetch(SITE_URL).then(function(r){return r.json();}).then(function(d){siteGJ=d;}).catch(function(e){console.warn('sites:',e);});
+}
+function loadHourly(){
+    return fetch(HOUR_URL).then(function(r){return r.json();}).then(function(d){hourlyD=d;}).catch(function(e){console.warn('hourly:',e);});
 }
 
-// ================================================================
-// RENDER — HOURLY FRAME
-// ================================================================
-function renderHourly(idx) {
-    if (!hourlyD||!hourlyD.timestamps||!hourlyD.timestamps.length) return;
-    mode='hourly';
-    curIdx=Math.max(0,Math.min(idx,hourlyD.timestamps.length-1));
-    var ts=hourlyD.timestamps[curIdx];
-    var frame=hourlyD.frames[ts];
+/* ================================================================
+   RENDER SITES for a given timestamp index
+   ================================================================ */
+function renderSites(idx){
+    siteCluster.clearLayers();
+    var useHourly=hourlyD&&hourlyD.timestamps&&hourlyD.timestamps.length>0&&idx<hourlyD.timestamps.length;
+    if(useHourly){
+        var ts=hourlyD.timestamps[idx];
+        var frame=hourlyD.frames[ts];
+        if(frame&&frame.features){
+            frame.features.forEach(function(f){
+                var c=f.geometry.coordinates, p=f.properties;
+                var risk=cRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
+                var rec=recOf(risk);
+                var m=L.marker([c[1],c[0]],{icon:mkI(rec)});
+                m.bindPopup(popHr(p,ts),{maxWidth:290,minWidth:230});
+                siteCluster.addLayer(m);
+            });
+        }
+    } else if(siteGJ&&siteGJ.features){
+        siteGJ.features.forEach(function(f){
+            var c=f.geometry.coordinates, p=f.properties;
+            var m=L.marker([c[1],c[0]],{icon:mkI(p.recommendation||'PENDING')});
+            m.bindPopup(popSum(p),{maxWidth:290,minWidth:230});
+            siteCluster.addLayer(m);
+        });
+    }
+}
+
+/* ================================================================
+   RENDER FRAME (grid + sites + UI)
+   ================================================================ */
+function renderFrame(idx){
+    if(!gridTimestamps.length)return;
+    curIdx=Math.max(0,Math.min(idx,gridTimestamps.length-1));
+    var ts=gridTimestamps[curIdx];
     var d=new Date(ts);
+    $bdate.textContent=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+    $bhour.textContent=d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' UTC';
+    $bsub.textContent='Hour '+(curIdx+1)+'/'+gridTimestamps.length;
+    $rng.value=curIdx;
 
-    $tdate.textContent=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-    $thour.textContent=d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' UTC';
-    $tsub.textContent='Hour '+(curIdx+1)+' of '+hourlyD.timestamps.length;
-    $slider.value=curIdx;
-
-    markers.clearLayers();
-    if (!frame||!frame.features) return;
-    frame.features.forEach(function(f){
-        var c=f.geometry.coordinates, p=f.properties;
-        var rec=p.recommendation||'PENDING';
-        // Recalculate risk client-side for the variable colour
-        var risk=calcRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
-        // Override recommendation with client-side risk calc
-        rec=recFromRisk(risk);
-
-        var m=L.marker([c[1],c[0]],{icon:mkIcon(rec)});
-        m.bindPopup(hourlyPopup(p,ts),{maxWidth:300,minWidth:240});
-
-        var val=getVal(p,true);
-        var clr=valToRgb(val,curVar);
-        L.circleMarker([c[1],c[0]],{radius:getRadius(val),color:'transparent',fillColor:rgb(clr,0.5),fillOpacity:1,interactive:false}).addTo(markers);
-        markers.addLayer(m);
-    });
+    wxCanvas.draw();
+    renderSites(curIdx);
 }
 
-// ================================================================
-// LEGEND
-// ================================================================
-function renderLegend() {
-    var s=SCALES[curVar];
-    var h='<div class="ml-title">'+s.title+'</div>';
-    s.stops.forEach(function(st){ h+='<div class="ml-row"><span class="ml-swatch" style="background:'+rgb(st[1],0.7)+'"></span><span class="ml-label">'+st[2]+'</span></div>'; });
-    document.getElementById('legend').innerHTML=h;
+/* ================================================================
+   LEGEND
+   ================================================================ */
+function renderLgnd(){
+    var s=SC[curVar];
+    var h='<div class="lgnd-t">'+s.t+'</div>';
+    s.s.forEach(function(st){h+='<div class="lgnd-r"><span class="lgnd-s" style="background:rgba('+st[1][0]+','+st[1][1]+','+st[1][2]+',0.7)"></span><span class="lgnd-l">'+st[2]+'</span></div>';});
+    document.getElementById('lgnd').innerHTML=h;
 }
 
-// ================================================================
-// TIME SLIDER SETUP
-// ================================================================
-function setupSlider() {
-    if (!hourlyD||!hourlyD.timestamps||!hourlyD.timestamps.length) { $slider.max=0; return; }
-    $slider.max=hourlyD.timestamps.length-1; $slider.value=0;
-}
+/* ================================================================
+   CONTROLS
+   ================================================================ */
+$rng.addEventListener('input',function(){renderFrame(parseInt(this.value));});
+document.getElementById('bback').addEventListener('click',function(){renderFrame(curIdx-1);});
+document.getElementById('bfwd').addEventListener('click',function(){renderFrame(curIdx+1);});
+document.getElementById('bplay').addEventListener('click',function(){playTmr?stopP():startP();});
 
-// ================================================================
-// CONTROLS
-// ================================================================
-$slider.addEventListener('input',function(){
-    if (mode==='summary'&&hourlyD&&hourlyD.timestamps&&hourlyD.timestamps.length) mode='hourly';
-    renderHourly(parseInt(this.value));
-});
-
-document.getElementById('bback').addEventListener('click',function(){
-    if(mode==='summary'){if(hourlyD&&hourlyD.timestamps&&hourlyD.timestamps.length)renderHourly(0);return;}
-    renderHourly(curIdx-1);
-});
-document.getElementById('bfwd').addEventListener('click',function(){
-    if(mode==='summary'){if(hourlyD&&hourlyD.timestamps&&hourlyD.timestamps.length)renderHourly(0);return;}
-    renderHourly(curIdx+1);
-});
-document.getElementById('blive').addEventListener('click',function(){ stopPlay(); renderSummary(); $slider.value=0; });
-document.getElementById('bplay').addEventListener('click',function(){ playTmr?stopPlay():startPlay(); });
-
-function startPlay(){
-    if(!hourlyD||!hourlyD.timestamps||!hourlyD.timestamps.length)return;
-    if(mode==='summary')renderHourly(0);
+function startP(){
+    if(!gridTimestamps.length)return;
     var b=document.getElementById('bplay'); b.textContent='⏸'; b.classList.add('on');
     playTmr=setInterval(function(){
         var n=curIdx+1;
-        if(n>=hourlyD.timestamps.length){stopPlay();return;}
-        renderHourly(n);
-    },500);
+        if(n>=gridTimestamps.length){n=0;} // loop
+        renderFrame(n);
+    },playSpeeds[playSpeedIdx]);
 }
-function stopPlay(){
+function stopP(){
     if(playTmr){clearInterval(playTmr);playTmr=null;}
     var b=document.getElementById('bplay'); b.textContent='▶'; b.classList.remove('on');
 }
 
+// Speed toggle
+document.getElementById('speedbtn').addEventListener('click',function(){
+    playSpeedIdx=(playSpeedIdx+1)%playSpeeds.length;
+    var labels=['1×','2×','3×','0.5×'];
+    this.textContent=labels[playSpeedIdx];
+    if(playTmr){stopP();startP();}
+});
+
 // Variable pills
-document.querySelectorAll('.var-pill').forEach(function(btn){
+document.querySelectorAll('.pill').forEach(function(btn){
     btn.addEventListener('click',function(){
-        document.querySelectorAll('.var-pill').forEach(function(b){b.classList.remove('active');});
-        this.classList.add('active');
+        document.querySelectorAll('.pill').forEach(function(b){b.classList.remove('on');});
+        this.classList.add('on');
         curVar=this.dataset.v;
-        renderLegend();
-        if(mode==='summary')renderSummary(); else renderHourly(curIdx);
+        renderLgnd();
+        renderFrame(curIdx);
     });
 });
 
-// ================================================================
-// DATA LOADING — independent, non-blocking
-// ================================================================
-function loadSummary(){
-    return fetch(SUMMARY_URL).then(function(r){return r.json();}).then(function(d){summaryGJ=d;}).catch(function(e){console.warn('Sites:',e);});
-}
-function loadHourly(){
-    return fetch(HOURLY_URL).then(function(r){return r.json();}).then(function(d){hourlyD=d;}).catch(function(e){console.warn('Hourly:',e);});
-}
+// Redraw canvas on pan/zoom
+map.on('moveend zoomend',function(){wxCanvas.draw();});
 
-// ================================================================
-// BOOT
-// ================================================================
-renderLegend();
+/* ================================================================
+   BOOT — load grid + sites in parallel
+   ================================================================ */
+renderLgnd();
 
-var p1=loadSummary();
-var p2=loadHourly();
-
-p1.then(function(){
-    renderSummary();
-    if(summaryGJ&&summaryGJ.features&&summaryGJ.features.length){
-        var lats=summaryGJ.features.map(function(f){return f.geometry.coordinates[1];});
-        var lons=summaryGJ.features.map(function(f){return f.geometry.coordinates[0];});
-        map.fitBounds([[Math.min.apply(null,lats)-0.5,Math.min.apply(null,lons)-0.5],[Math.max.apply(null,lats)+0.5,Math.max.apply(null,lons)+0.5]],{maxZoom:10});
+Promise.all([
+    loadGrid(),
+    loadSites(),
+    loadHourly()
+]).then(function(){
+    if(gridTimestamps.length){
+        $rng.max=gridTimestamps.length-1;
+        $rng.value=0;
     }
+    document.getElementById('gstatus').textContent=gridStore.length+' grid pts · '+gridTimestamps.length+'h';
+    renderFrame(0);
+
+    // Fit to sites if available, else UK
+    if(siteGJ&&siteGJ.features&&siteGJ.features.length){
+        var la=siteGJ.features.map(function(f){return f.geometry.coordinates[1];});
+        var lo=siteGJ.features.map(function(f){return f.geometry.coordinates[0];});
+        map.fitBounds([[Math.min.apply(null,la)-.8,Math.min.apply(null,lo)-.8],[Math.max.apply(null,la)+.8,Math.max.apply(null,lo)+.8]],{maxZoom:9});
+    }
+
     document.getElementById('mload').classList.add('done');
+}).catch(function(e){
+    console.error('Boot fail:',e);
+    document.getElementById('mtxt').textContent='Failed to load weather data';
 });
 
-p2.then(function(){ setupSlider(); });
-
-// Auto-refresh summary every 5 mins
-setInterval(function(){ loadSummary().then(function(){ if(mode==='summary')renderSummary(); }); },300000);
+// Refresh site data every 5 mins
+setInterval(function(){loadSites();loadHourly();},300000);
 
 })();
 </script>
