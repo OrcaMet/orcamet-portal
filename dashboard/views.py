@@ -499,15 +499,9 @@ def map_sites_hourly_json(request):
 @login_required(login_url="/login/")
 def map_risk_grid_json(request):
     """
-    JSON API endpoint returning the UK-wide risk grid data organised
-    by timestamp for the heatmap layer.
-
-    Query params:
-        timestamp (optional) — ISO timestamp to fetch a single frame.
-                               If omitted, returns all available timestamps
-                               and the grid metadata.
-
-    Returns GeoJSON with risk values at each grid point for the given hour.
+    JSON API endpoint returning the UK-wide risk grid data.
+    Returns {available: false} gracefully if the grid tables
+    don't exist yet (migration not run) or have no data.
     """
     try:
         from forecasts.models import UKRiskGridRun, UKRiskGridPoint
@@ -515,26 +509,20 @@ def map_risk_grid_json(request):
         return JsonResponse({"available": False, "message": "Risk grid models not available"})
 
     try:
-        # Find the latest successful grid run
         grid_run = (
             UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS)
             .order_by("-forecast_date", "-generated_at")
             .first()
         )
     except Exception:
-        # Table doesn't exist yet (migration not run)
         return JsonResponse({"available": False, "message": "Risk grid not yet configured"})
 
     if not grid_run:
-        return JsonResponse({
-            "available": False,
-            "message": "No risk grid data available",
-        })
+        return JsonResponse({"available": False, "message": "No risk grid data available"})
 
     requested_ts = request.GET.get("timestamp")
 
     if requested_ts:
-        # Return a single frame
         from django.utils.dateparse import parse_datetime
         ts = parse_datetime(requested_ts)
         if not ts:
@@ -545,14 +533,10 @@ def map_risk_grid_json(request):
             .values("latitude", "longitude", "risk", "wind_speed", "wind_gusts",
                     "precipitation", "temperature")
         )
-
         features = [
             {
                 "type": "Feature",
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [p["longitude"], p["latitude"]],
-                },
+                "geometry": {"type": "Point", "coordinates": [p["longitude"], p["latitude"]]},
                 "properties": {
                     "risk": round(p["risk"], 1),
                     "wind": round(p["wind_speed"], 1),
@@ -563,22 +547,15 @@ def map_risk_grid_json(request):
             }
             for p in points
         ]
-
-        return JsonResponse({
-            "type": "FeatureCollection",
-            "features": features,
-            "timestamp": requested_ts,
-        })
+        return JsonResponse({"type": "FeatureCollection", "features": features, "timestamp": requested_ts})
 
     else:
-        # Return metadata + all available timestamps
         timestamps = list(
             UKRiskGridPoint.objects.filter(run=grid_run)
             .values_list("timestamp", flat=True)
             .distinct()
             .order_by("timestamp")
         )
-
         return JsonResponse({
             "available": True,
             "forecast_date": grid_run.forecast_date.isoformat(),
