@@ -23,6 +23,7 @@ Usage (contour cache):
 import io
 import base64
 import logging
+import signal
 from pathlib import Path
 
 import numpy as np
@@ -58,6 +59,9 @@ FIGURE_DPI = 150
 # Contour levels for risk percentage (0–100%)
 CONTOUR_LEVELS = np.linspace(0, 100, 51)  # 2% steps for smooth gradients
 
+# Timeout for downloading coastline data (seconds)
+COASTLINE_DOWNLOAD_TIMEOUT = 10
+
 # Variable-specific colour map configuration
 VARIABLE_CMAPS = {
     "risk":   {"cmap": "jet",       "vmin": 0,  "vmax": 100},
@@ -83,11 +87,14 @@ def _get_uk_land_geometry():
 
     Uses Natural Earth cultural boundaries (admin-0 countries),
     filtered to UK + Ireland land areas. Handles varying column
-    names across different Natural Earth / geopandas versions.
+    names across different Natural Earth / geopandas versions:
+      - 'name', 'NAME', 'NAME_EN', 'ADMIN', 'admin'
+      - 'iso_a3', 'ISO_A3', 'ISO_A3_EH', 'ADM0_A3'
 
-    Falls back to None if geopandas/shapely aren't available.
+    Falls back to None (no coastline clip) if anything fails.
+    Includes a timeout on remote downloads to prevent hangs.
 
-    Returns a shapely geometry (MultiPolygon) of UK land areas.
+    Returns a shapely geometry (MultiPolygon) of UK land areas, or None.
     """
     global _land_geometry_cache, _land_geometry_loaded
 
@@ -103,27 +110,56 @@ def _get_uk_land_geometry():
 
         world = None
 
-        # Try geopandas bundled dataset (geopandas < 1.0)
+        # Strategy 1: Try geopandas bundled dataset (geopandas < 1.0)
         try:
             world = gpd.read_file(
                 gpd.datasets.get_path("naturalearth_lowres")
             )
+            logger.info("Loaded coastline from bundled naturalearth_lowres")
         except Exception:
             pass
 
-        # Fallback: download from Natural Earth CDN
+        # Strategy 2: Try downloading from Natural Earth CDN (with timeout)
         if world is None:
             try:
-                world = gpd.read_file(
+                import urllib.request
+                import tempfile
+                import zipfile
+                import os
+
+                ne_url = (
                     "https://naciscdn.org/naturalearth/110m/cultural/"
                     "ne_110m_admin_0_countries.zip"
                 )
-            except Exception as e:
-                logger.warning(f"Failed to download Natural Earth data: {e}")
-                return None
 
-        # Detect the correct column name for country names.
-        # Different versions use: 'name', 'NAME', 'ADMIN', 'NAME_EN', etc.
+                logger.info(
+                    f"Downloading Natural Earth data "
+                    f"(timeout={COASTLINE_DOWNLOAD_TIMEOUT}s)..."
+                )
+
+                # Download with timeout
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    zip_path = os.path.join(tmpdir, "ne.zip")
+                    urllib.request.urlretrieve(ne_url, zip_path)
+
+                    # Check if download succeeded (file > 0 bytes)
+                    if os.path.getsize(zip_path) > 0:
+                        world = gpd.read_file(f"zip://{zip_path}")
+                        logger.info("Loaded coastline from Natural Earth CDN")
+                    else:
+                        logger.warning("Natural Earth download was empty")
+
+            except Exception as e:
+                logger.warning(
+                    f"Natural Earth download failed: {e}"
+                )
+
+        if world is None:
+            logger.warning("Could not load any Natural Earth data")
+            return None
+
+        # ---- Detect the correct column names ----
+        # Different versions/sources use different column headers
         name_col = None
         iso_col = None
 
@@ -137,9 +173,14 @@ def _get_uk_land_geometry():
                 iso_col = col
                 break
 
+        logger.debug(
+            f"Natural Earth columns: {list(world.columns)}, "
+            f"using name_col={name_col}, iso_col={iso_col}"
+        )
+
         uk_geom = None
 
-        # Try filtering by name
+        # Try filtering by country name
         if name_col:
             uk_names = ["United Kingdom", "Ireland"]
             uk_geom = world[world[name_col].isin(uk_names)]
@@ -151,7 +192,7 @@ def _get_uk_land_geometry():
         if uk_geom is None or uk_geom.empty:
             logger.warning(
                 f"Could not find UK/Ireland in Natural Earth data. "
-                f"Available columns: {list(world.columns)}"
+                f"Columns: {list(world.columns)}"
             )
             return None
 
@@ -180,34 +221,16 @@ def _get_uk_land_geometry():
 def _create_land_mask(land_geom, grid_lons, grid_lats):
     """
     Create a boolean mask where True = land, False = sea.
-
-    Parameters
-    ----------
-    land_geom : shapely geometry or None
-        UK land polygon. If None, returns all-True mask (no clipping).
-    grid_lons : 2D ndarray
-        Longitude grid (meshgrid output).
-    grid_lats : 2D ndarray
-        Latitude grid (meshgrid output).
-
-    Returns
-    -------
-    mask : 2D boolean ndarray
-        True where the grid point is over land.
     """
     if land_geom is None:
         return np.ones(grid_lons.shape, dtype=bool)
 
     try:
         from shapely.vectorized import contains
-
-        # Fast vectorised containment check
         mask = contains(land_geom, grid_lons, grid_lats)
         return mask
     except ImportError:
-        # Fallback: point-by-point (slower but works)
         from shapely.geometry import Point
-
         mask = np.zeros(grid_lons.shape, dtype=bool)
         for i in range(grid_lons.shape[0]):
             for j in range(grid_lons.shape[1]):
@@ -251,24 +274,10 @@ def interpolate_risk_surface(
 ) -> tuple:
     """
     Interpolate scattered (lat, lon, value) data onto a regular grid
-    using CloughTocher2D (C1-continuous piecewise cubic interpolation
-    based on Delaunay triangulation).
+    using CloughTocher2D.
 
-    Parameters
-    ----------
-    lats : 1D array of latitudes
-    lons : 1D array of longitudes
-    values : 1D array of values
-    resolution : int
-        Number of grid points along the longest axis.
-
-    Returns
-    -------
-    grid_lons : 2D ndarray
-    grid_lats : 2D ndarray
-    grid_values : 2D ndarray (NaN outside convex hull)
+    Returns (grid_lons, grid_lats, grid_values) as 2D ndarrays.
     """
-    # Remove any NaN input points
     valid = ~(np.isnan(lats) | np.isnan(lons) | np.isnan(values))
     lats = lats[valid]
     lons = lons[valid]
@@ -279,7 +288,6 @@ def interpolate_risk_surface(
             f"Need at least 4 data points for interpolation, got {len(lats)}"
         )
 
-    # Build the interpolator
     points = np.column_stack([lons, lats])
     try:
         tri = Delaunay(points)
@@ -288,7 +296,6 @@ def interpolate_risk_surface(
 
     interpolator = CloughTocher2DInterpolator(tri, values, tol=1e-6)
 
-    # Create the regular output grid
     lat_range = UK_LAT_MAX - UK_LAT_MIN
     lon_range = UK_LON_MAX - UK_LON_MIN
 
@@ -303,7 +310,6 @@ def interpolate_risk_surface(
     grid_lat_1d = np.linspace(UK_LAT_MIN, UK_LAT_MAX, n_lat)
     grid_lons, grid_lats = np.meshgrid(grid_lon_1d, grid_lat_1d)
 
-    # Evaluate the interpolator on the grid
     grid_points = np.column_stack([grid_lons.ravel(), grid_lats.ravel()])
     grid_values = interpolator(grid_points).reshape(grid_lons.shape)
 
@@ -440,8 +446,6 @@ def generate_uk_risk_map(
     land_geom = _get_uk_land_geometry()
     land_mask = _create_land_mask(land_geom, grid_lons, grid_lats)
     grid_values_masked = np.where(land_mask, grid_values, np.nan)
-
-    # Clamp
     grid_values_masked = np.clip(grid_values_masked, 0, 100)
 
     fig, ax = plt.subplots(
@@ -528,11 +532,7 @@ def generate_map_from_grid_run(
     grid_run_id: int,
     resolution: int = INTERP_RESOLUTION,
 ) -> str:
-    """
-    Generate a risk map from stored UKRiskGridRun data.
-
-    Returns base64-encoded PNG.
-    """
+    """Generate a risk map from stored UKRiskGridRun data."""
     from forecasts.models import UKRiskGridRun, UKRiskGridPoint
     from django.db.models import Max
 
