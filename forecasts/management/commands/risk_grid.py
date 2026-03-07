@@ -59,7 +59,11 @@ DEFAULT_THRESHOLDS = {
 }
 
 HOURLY_VARS = "wind_speed_10m,wind_gusts_10m,precipitation,temperature_2m"
-
+# Models to use for the grid (subset of MODELS_CONFIG to reduce
+# API calls and memory on constrained environments like Render).
+# UKV = best UK detail, ECMWF = longest horizon backbone,
+# ICON-EU = Europe-wide, ARPEGE = synoptic backbone.
+GRID_MODELS = ["ukv", "ecmwf", "icon_eu", "arpege_europe"]
 
 def _parse_timestamp(t_str):
     """Parse Open-Meteo timestamp string to timezone-aware datetime."""
@@ -175,7 +179,7 @@ class Command(BaseCommand):
 
         # Determine which models cover which grid points
         model_points = {}
-        for model_name in MODELS_CONFIG:
+        for model_name in GRID_CONFIG:
             in_domain = [
                 pt for pt in grid_points
                 if is_in_domain(model_name, pt[0], pt[1])
