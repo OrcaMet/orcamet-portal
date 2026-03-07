@@ -289,10 +289,10 @@ class Command(BaseCommand):
                         self.stdout.write(
                             self.style.WARNING(
                                 f"    ⚠ Rate limited on {model_display}! "
-                                f"Waiting 30s..."
+                                f"Waiting 60s..."
                             )
                         )
-                        time.sleep(30)
+                        time.sleep(60)
                         try:
                             results = fetch_batch(
                                 model_name, batch_lats, batch_lons,
@@ -329,7 +329,7 @@ class Command(BaseCommand):
                     model_failed += len(batch_pts)
 
                 # Pause between batches
-                time.sleep(0.5)
+                time.sleep(2.0)
 
             if model_results:
                 model_data[model_name] = model_results
@@ -346,7 +346,8 @@ class Command(BaseCommand):
                         f"    ✗ {model_display}: ALL points failed"
                     )
                 )
-
+            # Pause between models to avoid cumulative rate limiting
+            time.sleep(5.0)
         if not model_data:
             grid_run.status = UKRiskGridRun.Status.FAILED
             grid_run.error_message = "All models failed — no data fetched"
