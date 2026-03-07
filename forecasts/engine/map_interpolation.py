@@ -262,10 +262,9 @@ def render_contour_to_bytes(
     # Clamp to variable range
     grid_values = np.clip(grid_values, cm["vmin"], cm["vmax"])
 
-    # Land mask
-    land_geom = _get_uk_land_geometry()
-    land_mask = _create_land_mask(land_geom, grid_lons, grid_lats)
-    grid_values_masked = np.where(land_mask, grid_values, np.nan)
+    # No land masking for overlays — the dark base map handles sea.
+    # This avoids jagged coastline edges from low-res Natural Earth data.
+    grid_values_masked = grid_values
 
     # Handle all-constant data: contourf needs at least some variation
     # in the levels that spans the data range. If data is constant,
@@ -304,7 +303,7 @@ def render_contour_to_bytes(
             norm=mcolors.Normalize(vmin=cm["vmin"], vmax=cm["vmax"]),
             extend="both",
             antialiased=True,
-            alpha=0.7,
+            alpha=0.5,
         )
     except Exception as e:
         # contourf can fail on degenerate data — log and return empty
@@ -321,8 +320,6 @@ def render_contour_to_bytes(
         buf.seek(0)
         return buf.getvalue()
 
-    if land_geom is not None:
-        _draw_coastline(ax, land_geom)
 
     ax.set_xlim(UK_LON_MIN, UK_LON_MAX)
     ax.set_ylim(UK_LAT_MIN, UK_LAT_MAX)
