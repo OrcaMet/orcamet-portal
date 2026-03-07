@@ -6,12 +6,9 @@ API calls to Open-Meteo, blends with geographic-aware weighting (matching
 the site-specific forecast engine in core.py), and stores hourly ensemble
 risk scores for the interactive contour map.
 
-Models: UKV, ICON-D2, AROME France, HARMONIE Europe, ARPEGE Europe,
-        ECMWF IFS, ICON-EU
-
-The number of API calls is approximately:
-    (grid_points / batch_size) × eligible_models ≈ 8 × 7 = 56 calls
-    (not 380 × 7 = 2,660 individual calls)
+MEMORY-EFFICIENT: Processes one model at a time, accumulating weighted
+sums into numpy arrays and discarding raw API data before fetching the
+next model. Peak memory is O(1 model) not O(all models).
 
 Usage:
     python manage.py risk_grid                    # Default 0.5° grid, all models
@@ -23,9 +20,9 @@ After completion, run generate_contour_cache to pre-render map images:
     python manage.py generate_contour_cache
 """
 
+import gc
 import logging
 import time
-from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
 import numpy as np
@@ -61,7 +58,6 @@ DEFAULT_THRESHOLDS = {
     "temp_min_cancel": -2.0,
 }
 
-# Weather variables to extract from the API
 HOURLY_VARS = "wind_speed_10m,wind_gusts_10m,precipitation,temperature_2m"
 
 
@@ -93,12 +89,7 @@ def _safe_float(value, default=0.0):
 def fetch_batch(model_name, lats, lons, start_date, end_date):
     """
     Fetch weather data for MULTIPLE locations in a single API call.
-
-    Open-Meteo accepts comma-separated latitude/longitude values and
-    returns an array of results (one per location).
-
-    Returns:
-        List of dicts, one per location. Failed locations return None.
+    Returns list of dicts, one per location. Failed locations return None.
     """
     config = MODELS_CONFIG[model_name]
     api_key = getattr(settings, "OPENMETEO_API_KEY", "")
@@ -121,7 +112,6 @@ def fetch_batch(model_name, lats, lons, start_date, end_date):
     resp.raise_for_status()
     data = resp.json()
 
-    # Single location returns a dict; multiple returns a list
     if isinstance(data, dict):
         data = [data]
 
@@ -149,21 +139,15 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            "--resolution",
-            type=float,
-            default=0.5,
+            "--resolution", type=float, default=0.5,
             help="Grid spacing in degrees (default: 0.5 ≈ 55km)",
         )
         parser.add_argument(
-            "--days",
-            type=int,
-            default=3,
+            "--days", type=int, default=3,
             help="Number of forecast days (default: 3)",
         )
         parser.add_argument(
-            "--batch-size",
-            type=int,
-            default=50,
+            "--batch-size", type=int, default=50,
             help="Locations per API call (default: 50, max ~100)",
         )
 
@@ -177,8 +161,7 @@ class Command(BaseCommand):
         lons = np.arange(UK_LON_MIN, UK_LON_MAX + resolution, resolution)
         grid_points = [
             (round(float(lat), 4), round(float(lon), 4))
-            for lat in lats
-            for lon in lons
+            for lat in lats for lon in lons
         ]
         total_points = len(grid_points)
 
@@ -187,17 +170,19 @@ class Command(BaseCommand):
         start_str = today.strftime("%Y-%m-%d")
         end_str = end_date.strftime("%Y-%m-%d")
 
+        # Build a fast lookup: (lat, lon) -> index in grid_points
+        point_index = {pt: i for i, pt in enumerate(grid_points)}
+
         # Determine which models cover which grid points
-        model_points = {}  # model_name -> list of (lat, lon)
+        model_points = {}
         for model_name in MODELS_CONFIG:
             in_domain = [
-                (lat, lon) for lat, lon in grid_points
-                if is_in_domain(model_name, lat, lon)
+                pt for pt in grid_points
+                if is_in_domain(model_name, pt[0], pt[1])
             ]
             if in_domain:
                 model_points[model_name] = in_domain
 
-        # Calculate total API calls
         total_api_calls = sum(
             (len(pts) + batch_size - 1) // batch_size
             for pts in model_points.values()
@@ -210,15 +195,22 @@ class Command(BaseCommand):
         self.stdout.write(f"  Period: {today} to {end_date} ({num_days} days)")
         self.stdout.write(f"  Models: {len(model_points)} eligible")
         for m, pts in model_points.items():
-            n_batches = (len(pts) + batch_size - 1) // batch_size
+            n_b = (len(pts) + batch_size - 1) // batch_size
             self.stdout.write(
-                f"    {MODELS_CONFIG[m]['name']}: "
-                f"{len(pts)} pts → {n_batches} API calls"
+                f"    {MODELS_CONFIG[m]['name']}: {len(pts)} pts → {n_b} calls"
             )
         self.stdout.write(
             f"  Total API calls: {total_api_calls} "
             f"(vs {total_points * len(model_points)} individual)"
         )
+
+        # Pre-compute geographic weights for every grid point
+        # weight_table[point_index][model_name] = weight
+        self.stdout.write("  Pre-computing geographic weights...")
+        weight_table = []
+        for lat, lon in grid_points:
+            w = get_model_weights(lat, lon, exposure="urban")
+            weight_table.append(w)
 
         # Create the run record
         models_used = list(model_points.keys())
@@ -234,7 +226,7 @@ class Command(BaseCommand):
             models_used=models_used,
         )
 
-        # Delete previous successful runs for today (replace strategy)
+        # Delete previous successful runs for today
         UKRiskGridRun.objects.filter(
             forecast_date=today,
             status=UKRiskGridRun.Status.SUCCESS,
@@ -243,12 +235,59 @@ class Command(BaseCommand):
         start_time = time.time()
 
         # ============================================================
-        # PHASE 1: Fetch raw data from all models
+        # PHASE 1: Fetch first model to determine the timestamp axis
         # ============================================================
-        # model_data[model_name][(lat, lon)] = {time: [...], wind_speed: [...], ...}
-        model_data = {}
-        failed_models = []
+        # We need to know num_hours before allocating accumulators.
+        # Fetch ECMWF first (longest horizon, always available).
+        probe_model = "ecmwf" if "ecmwf" in model_points else next(iter(model_points))
+        probe_pts = model_points[probe_model][:1]
+
+        self.stdout.write(f"\n  Probing {MODELS_CONFIG[probe_model]['name']} for timestamp axis...")
+        try:
+            probe_result = fetch_batch(
+                probe_model, [probe_pts[0][0]], [probe_pts[0][1]],
+                start_str, end_str,
+            )
+            time.sleep(1.0)
+        except Exception as e:
+            grid_run.status = UKRiskGridRun.Status.FAILED
+            grid_run.error_message = f"Probe failed: {e}"
+            grid_run.save()
+            self.stderr.write(self.style.ERROR(f"  ✗ Probe failed: {e}"))
+            return
+
+        if not probe_result or probe_result[0] is None:
+            grid_run.status = UKRiskGridRun.Status.FAILED
+            grid_run.error_message = "Probe returned no data"
+            grid_run.save()
+            self.stderr.write(self.style.ERROR("  ✗ Probe returned no data"))
+            return
+
+        ref_times = probe_result[0]["time"]
+        num_hours = len(ref_times)
+        self.stdout.write(f"  Timestamp axis: {num_hours} hours")
+
+        # ============================================================
+        # PHASE 2: Allocate numpy accumulators
+        # ============================================================
+        # Shape: (total_points, num_hours)
+        # We accumulate weighted sums and total weights, then divide.
+        acc_wind = np.zeros((total_points, num_hours), dtype=np.float32)
+        acc_gust = np.zeros((total_points, num_hours), dtype=np.float32)
+        acc_prcp = np.zeros((total_points, num_hours), dtype=np.float32)
+        acc_temp = np.zeros((total_points, num_hours), dtype=np.float32)
+        acc_wt   = np.zeros((total_points, num_hours), dtype=np.float32)
+
+        self.stdout.write(
+            f"  Accumulators: {total_points}×{num_hours} = "
+            f"{total_points * num_hours * 5 * 4 / 1024 / 1024:.1f} MB"
+        )
+
+        # ============================================================
+        # PHASE 3: Fetch each model, accumulate, discard
+        # ============================================================
         api_calls_made = 0
+        successful_models = []
 
         for model_name, points in model_points.items():
             model_display = MODELS_CONFIG[model_name]["name"]
@@ -259,265 +298,209 @@ class Command(BaseCommand):
                 f"({len(points)} pts, {n_batches} batches)..."
             )
 
-            model_results = {}
-            model_failed = 0
+            model_pts_ok = 0
+            model_pts_fail = 0
 
             for batch_idx in range(n_batches):
-                batch_start = batch_idx * batch_size
-                batch_end = min(batch_start + batch_size, len(points))
-                batch_pts = points[batch_start:batch_end]
+                b_start = batch_idx * batch_size
+                b_end = min(b_start + batch_size, len(points))
+                batch_pts = points[b_start:b_end]
                 batch_lats = [p[0] for p in batch_pts]
                 batch_lons = [p[1] for p in batch_pts]
 
+                results = None
                 try:
                     results = fetch_batch(
                         model_name, batch_lats, batch_lons,
-                        start_str, end_str
+                        start_str, end_str,
                     )
                     api_calls_made += 1
-
-                    for result in results:
-                        if result is None:
-                            model_failed += 1
-                            continue
-                        key = (result["lat"], result["lon"])
-                        model_results[key] = result
-
                 except requests.exceptions.HTTPError as e:
                     if e.response is not None and e.response.status_code == 429:
-                        # Rate limited — wait and retry once
-                        self.stdout.write(
-                            self.style.WARNING(
-                                f"    ⚠ Rate limited on {model_display}! "
-                                f"Waiting 60s..."
-                            )
-                        )
+                        self.stdout.write(self.style.WARNING(
+                            f"    ⚠ Rate limited! Waiting 60s..."
+                        ))
                         time.sleep(60)
                         try:
                             results = fetch_batch(
                                 model_name, batch_lats, batch_lons,
-                                start_str, end_str
+                                start_str, end_str,
                             )
                             api_calls_made += 1
-                            for result in results:
-                                if result is None:
-                                    model_failed += 1
-                                    continue
-                                key = (result["lat"], result["lon"])
-                                model_results[key] = result
                         except Exception as retry_e:
-                            self.stdout.write(
-                                self.style.ERROR(
-                                    f"    ✗ Retry failed: {retry_e}"
-                                )
-                            )
-                            model_failed += len(batch_pts)
+                            self.stdout.write(self.style.ERROR(
+                                f"    ✗ Retry failed: {retry_e}"
+                            ))
                     else:
-                        self.stdout.write(
-                            self.style.ERROR(
-                                f"    ✗ Batch {batch_idx + 1} failed: {e}"
-                            )
-                        )
-                        model_failed += len(batch_pts)
-
+                        self.stdout.write(self.style.ERROR(
+                            f"    ✗ Batch {batch_idx+1} failed: {e}"
+                        ))
                 except Exception as e:
-                    self.stdout.write(
-                        self.style.ERROR(
-                            f"    ✗ Batch {batch_idx + 1} failed: {e}"
-                        )
-                    )
-                    model_failed += len(batch_pts)
+                    self.stdout.write(self.style.ERROR(
+                        f"    ✗ Batch {batch_idx+1} failed: {e}"
+                    ))
+
+                # Accumulate results into numpy arrays immediately
+                if results:
+                    for result in results:
+                        if result is None:
+                            model_pts_fail += 1
+                            continue
+
+                        key = (result["lat"], result["lon"])
+                        idx = point_index.get(key)
+                        if idx is None:
+                            model_pts_fail += 1
+                            continue
+
+                        # Get this model's weight for this grid point
+                        w = weight_table[idx].get(model_name, 0.0)
+                        if w <= 0:
+                            continue
+
+                        ws = result.get("wind_speed", [])
+                        gs = result.get("wind_gusts", [])
+                        ps = result.get("precipitation", [])
+                        ts = result.get("temperature", [])
+                        n_t = min(len(ws), len(gs), len(ps), len(ts), num_hours)
+
+                        for t in range(n_t):
+                            wv = _safe_float(ws[t] if t < len(ws) else None)
+                            gv = _safe_float(gs[t] if t < len(gs) else None)
+                            pv = _safe_float(ps[t] if t < len(ps) else None)
+                            tv = _safe_float(ts[t] if t < len(ts) else None, 10.0)
+
+                            acc_wind[idx, t] += w * wv
+                            acc_gust[idx, t] += w * gv
+                            acc_prcp[idx, t] += w * pv
+                            acc_temp[idx, t] += w * tv
+                            acc_wt[idx, t]   += w
+
+                        model_pts_ok += 1
+                else:
+                    model_pts_fail += len(batch_pts)
 
                 # Pause between batches
                 time.sleep(2.0)
 
-            if model_results:
-                model_data[model_name] = model_results
-                self.stdout.write(
-                    self.style.SUCCESS(
-                        f"    ✓ {model_display}: {len(model_results)} pts OK"
-                        + (f", {model_failed} failed" if model_failed else "")
-                    )
-                )
+            # Log model result
+            if model_pts_ok > 0:
+                successful_models.append(model_name)
+                self.stdout.write(self.style.SUCCESS(
+                    f"    ✓ {model_display}: {model_pts_ok} pts OK"
+                    + (f", {model_pts_fail} failed" if model_pts_fail else "")
+                ))
             else:
-                failed_models.append(model_name)
-                self.stdout.write(
-                    self.style.ERROR(
-                        f"    ✗ {model_display}: ALL points failed"
-                    )
-                )
-            # Pause between models to avoid cumulative rate limiting
+                self.stdout.write(self.style.ERROR(
+                    f"    ✗ {model_display}: ALL points failed"
+                ))
+
+            # Force garbage collection after each model
+            gc.collect()
+
+            # Pause between models
             time.sleep(5.0)
-        if not model_data:
+
+        if not successful_models:
             grid_run.status = UKRiskGridRun.Status.FAILED
-            grid_run.error_message = "All models failed — no data fetched"
+            grid_run.error_message = "All models failed"
             grid_run.save()
             self.stderr.write(self.style.ERROR("  ✗ All models failed"))
             return
 
         # ============================================================
-        # PHASE 2: Blend models with geographic-aware weighting
+        # PHASE 4: Normalise and compute risk scores, build DB records
         # ============================================================
         self.stdout.write(
-            f"\n  Blending {len(model_data)} models with geographic weighting..."
+            f"\n  Normalising ensemble from {len(successful_models)} models "
+            f"and computing risk scores..."
         )
 
-        # Determine the reference timestamp list from the model with
-        # the most timestamps (usually ECMWF with the longest horizon)
-        ref_model = max(
-            model_data.keys(),
-            key=lambda m: max(
-                len(d.get("time", []))
-                for d in model_data[m].values()
-            )
-        )
-        # Get timestamps from first available point of reference model
-        ref_point = next(iter(model_data[ref_model].values()))
-        ref_times = ref_point["time"]
+        # Normalise: divide accumulated sums by total weight
+        # Where weight is 0, values stay 0
+        mask = acc_wt > 0
+        acc_wind = np.where(mask, acc_wind / acc_wt, 0.0)
+        acc_gust = np.where(mask, acc_gust / acc_wt, 0.0)
+        acc_prcp = np.where(mask, acc_prcp / acc_wt, 0.0)
+        acc_temp = np.where(mask, acc_temp / acc_wt, 10.0)
 
+        # Free weight accumulator
+        del acc_wt
+        gc.collect()
+
+        # Build DB records in chunks to limit memory
         all_point_records = []
         blend_errors = 0
+        DB_BATCH = 5000
 
-        for lat, lon in grid_points:
-            key = (lat, lon)
-
-            # Get geographic weights for this location
-            weights = get_model_weights(lat, lon, exposure="urban")
-
-            # Remove models that failed entirely
-            weights = {
-                m: w for m, w in weights.items()
-                if m in model_data
-            }
-
-            if not weights:
-                # Fallback: use whatever models we have
-                available = [m for m in model_data if key in model_data[m]]
-                if not available:
-                    blend_errors += 1
-                    continue
-                weights = {m: 1.0 / len(available) for m in available}
-
-            # Re-normalise weights for models that have data at this point
-            active_weights = {
-                m: w for m, w in weights.items()
-                if m in model_data and key in model_data[m]
-            }
-
-            if not active_weights:
+        for pt_idx, (lat, lon) in enumerate(grid_points):
+            if not mask[pt_idx].any():
                 blend_errors += 1
                 continue
 
-            total_w = sum(active_weights.values())
-            active_weights = {m: w / total_w for m, w in active_weights.items()}
-
-            # Blend across timestamps
-            for t_idx, t_str in enumerate(ref_times):
-                w_blend = 0.0
-                g_blend = 0.0
-                p_blend = 0.0
-                t_blend = 0.0
-                w_total = 0.0
-
-                for m_name, m_weight in active_weights.items():
-                    m_point = model_data[m_name].get(key)
-                    if m_point is None:
-                        continue
-
-                    m_times = m_point.get("time", [])
-                    if t_idx >= len(m_times):
-                        # This model's forecast horizon is shorter
-                        continue
-
-                    ws = m_point.get("wind_speed", [])
-                    gs = m_point.get("wind_gusts", [])
-                    ps = m_point.get("precipitation", [])
-                    ts = m_point.get("temperature", [])
-
-                    w_val = _safe_float(
-                        ws[t_idx] if t_idx < len(ws) else None
-                    )
-                    g_val = _safe_float(
-                        gs[t_idx] if t_idx < len(gs) else None
-                    )
-                    p_val = _safe_float(
-                        ps[t_idx] if t_idx < len(ps) else None
-                    )
-                    t_val = _safe_float(
-                        ts[t_idx] if t_idx < len(ts) else None, default=10.0
-                    )
-
-                    w_blend += m_weight * w_val
-                    g_blend += m_weight * g_val
-                    p_blend += m_weight * p_val
-                    t_blend += m_weight * t_val
-                    w_total += m_weight
-
-                # Re-normalise if some models had shorter horizons
-                if w_total > 0 and w_total < 0.99:
-                    w_blend /= w_total
-                    g_blend /= w_total
-                    p_blend /= w_total
-                    t_blend /= w_total
-                elif w_total == 0:
+            for t_idx in range(num_hours):
+                if not mask[pt_idx, t_idx]:
                     continue
 
-                risk = calculate_hourly_risk(
-                    w_blend, g_blend, p_blend, t_blend, DEFAULT_THRESHOLDS
-                )
+                w = float(acc_wind[pt_idx, t_idx])
+                g = float(acc_gust[pt_idx, t_idx])
+                p = float(acc_prcp[pt_idx, t_idx])
+                t = float(acc_temp[pt_idx, t_idx])
+
+                risk = calculate_hourly_risk(w, g, p, t, DEFAULT_THRESHOLDS)
 
                 all_point_records.append(UKRiskGridPoint(
                     run=grid_run,
                     latitude=lat,
                     longitude=lon,
-                    timestamp=_parse_timestamp(t_str),
-                    wind_speed=round(w_blend, 2),
-                    wind_gusts=round(g_blend, 2),
-                    precipitation=round(p_blend, 2),
-                    temperature=round(t_blend, 2),
+                    timestamp=_parse_timestamp(ref_times[t_idx]),
+                    wind_speed=round(w, 2),
+                    wind_gusts=round(g, 2),
+                    precipitation=round(p, 2),
+                    temperature=round(t, 2),
                     risk=round(risk, 2),
                 ))
 
-        # ============================================================
-        # PHASE 3: Store results
-        # ============================================================
-        if all_point_records:
-            self.stdout.write(
-                f"  Storing {len(all_point_records)} ensemble grid records..."
-            )
-            try:
-                batch_db_size = 5000
-                for i in range(0, len(all_point_records), batch_db_size):
-                    batch = all_point_records[i:i + batch_db_size]
-                    UKRiskGridPoint.objects.bulk_create(batch)
-
-                grid_run.status = UKRiskGridRun.Status.SUCCESS
-                successful = total_points - blend_errors
-                grid_run.num_hours = (
-                    len(all_point_records) // max(successful, 1)
-                )
-                grid_run.save()
-
-                elapsed = time.time() - start_time
-                self.stdout.write(self.style.SUCCESS(
-                    f"\n  ✓ Complete: {len(all_point_records)} records "
-                    f"({successful} points, {blend_errors} failed) "
-                    f"in {elapsed:.0f}s using {api_calls_made} API calls "
-                    f"across {len(model_data)} models"
-                ))
+            # Flush to DB periodically to limit in-memory records
+            if len(all_point_records) >= DB_BATCH:
+                UKRiskGridPoint.objects.bulk_create(all_point_records)
                 self.stdout.write(
-                    f"  Models used: "
-                    f"{', '.join(MODELS_CONFIG[m]['name'] for m in model_data)}"
+                    f"    Flushed {len(all_point_records)} records to DB "
+                    f"({pt_idx + 1}/{total_points} points)"
                 )
+                all_point_records = []
 
-            except Exception as e:
-                logger.error(f"Bulk insert failed: {e}")
-                grid_run.status = UKRiskGridRun.Status.FAILED
-                grid_run.error_message = str(e)
-                grid_run.save()
-                self.stderr.write(
-                    self.style.ERROR(f"  ✗ Storage failed: {e}")
-                )
+        # Flush remaining
+        if all_point_records:
+            UKRiskGridPoint.objects.bulk_create(all_point_records)
+
+        # Free numpy arrays
+        del acc_wind, acc_gust, acc_prcp, acc_temp, mask
+        gc.collect()
+
+        # ============================================================
+        # PHASE 5: Finalise
+        # ============================================================
+        successful = total_points - blend_errors
+        total_records = UKRiskGridPoint.objects.filter(run=grid_run).count()
+
+        if total_records > 0:
+            grid_run.status = UKRiskGridRun.Status.SUCCESS
+            grid_run.num_hours = num_hours
+            grid_run.models_used = successful_models
+            grid_run.save()
+
+            elapsed = time.time() - start_time
+            self.stdout.write(self.style.SUCCESS(
+                f"\n  ✓ Complete: {total_records} records "
+                f"({successful} points, {blend_errors} skipped) "
+                f"in {elapsed:.0f}s using {api_calls_made} API calls "
+                f"across {len(successful_models)} models"
+            ))
+            self.stdout.write(
+                f"  Models: "
+                f"{', '.join(MODELS_CONFIG[m]['name'] for m in successful_models)}"
+            )
         else:
             grid_run.status = UKRiskGridRun.Status.FAILED
             grid_run.error_message = "No data produced after blending"
