@@ -28,6 +28,18 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 # ============================================================
+# OPEN-METEO API HOST
+# ============================================================
+#
+# Use the COMMERCIAL endpoint when an API key is configured —
+# the free `api.open-meteo.com` host ignores paid keys and will
+# rate-limit (429) under the free-tier quota regardless.
+#
+# https://open-meteo.com/en/docs#api-documentation
+#
+OPENMETEO_HOST = "https://customer-api.open-meteo.com"
+
+# ============================================================
 # MULTI-MODEL CONFIGURATION
 # ============================================================
 
@@ -35,28 +47,28 @@ MODELS_CONFIG = {
     # --- High-resolution regional models (domain-limited) ---
     "ukv": {
         "name": "Met Office UKV",
-        "url": "https://api.open-meteo.com/v1/forecast",
+        "url": f"{OPENMETEO_HOST}/v1/forecast",
         "params": {"models": "ukmo_uk_deterministic_2km"},
         "resolution_km": 2.0,
         "forecast_days": 5,
     },
     "icon_d2": {
         "name": "DWD ICON-D2",
-        "url": "https://api.open-meteo.com/v1/dwd-icon",
+        "url": f"{OPENMETEO_HOST}/v1/dwd-icon",
         "params": {"models": "icon_d2"},
         "resolution_km": 2.2,
         "forecast_days": 2,
     },
     "arome_france": {
         "name": "Météo-France AROME",
-        "url": "https://api.open-meteo.com/v1/meteofrance",
+        "url": f"{OPENMETEO_HOST}/v1/meteofrance",
         "params": {"models": "arome_france"},
         "resolution_km": 2.5,
         "forecast_days": 2,
     },
     "harmonie_europe": {
         "name": "KNMI HARMONIE AROME Europe",
-        "url": "https://api.open-meteo.com/v1/knmi",
+        "url": f"{OPENMETEO_HOST}/v1/knmi",
         "params": {"models": "knmi_harmonie_arome_europe"},
         "resolution_km": 5.5,
         "forecast_days": 2,
@@ -64,21 +76,21 @@ MODELS_CONFIG = {
     # --- Synoptic / Europe-wide models (always available for UK) ---
     "arpege_europe": {
         "name": "Météo-France ARPEGE Europe",
-        "url": "https://api.open-meteo.com/v1/meteofrance",
+        "url": f"{OPENMETEO_HOST}/v1/meteofrance",
         "params": {"models": "arpege_europe"},
         "resolution_km": 11.0,
         "forecast_days": 4,
     },
     "ecmwf": {
         "name": "ECMWF IFS",
-        "url": "https://api.open-meteo.com/v1/ecmwf",
+        "url": f"{OPENMETEO_HOST}/v1/ecmwf",
         "params": {},
         "resolution_km": 9.0,
         "forecast_days": 10,
     },
     "icon_eu": {
         "name": "DWD ICON-EU",
-        "url": "https://api.open-meteo.com/v1/dwd-icon",
+        "url": f"{OPENMETEO_HOST}/v1/dwd-icon",
         "params": {"models": "icon_eu"},
         "resolution_km": 7.0,
         "forecast_days": 5,
