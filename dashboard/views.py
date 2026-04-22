@@ -220,7 +220,7 @@ def site_detail(request, site_id):
 def weather_map(request):
     """
     Interactive Leaflet map showing all sites with live risk status
-    and ensemble contour overlay.
+    and ensemble contour overlay. Includes data freshness warning.
     """
     user = request.user
     sites_qs = _get_user_sites(user)
@@ -244,6 +244,18 @@ def weather_map(request):
     )
     pending_count = sum(1 for s in sites_list if not s.latest_run)
 
+    # Data freshness: find the latest successful risk grid run
+    latest_grid_run = UKRiskGridRun.objects.filter(
+        status=UKRiskGridRun.Status.SUCCESS
+    ).order_by("-forecast_date").first()
+
+    data_age_hours = None
+    last_grid_update = None
+    if latest_grid_run:
+        age = timezone.now() - latest_grid_run.created_at
+        data_age_hours = int(age.total_seconds() / 3600)
+        last_grid_update = latest_grid_run.created_at
+
     context = {
         "user": user,
         "total_sites": total_sites,
@@ -251,9 +263,10 @@ def weather_map(request):
         "caution_count": caution_count,
         "cancel_count": cancel_count,
         "pending_count": pending_count,
+        "data_age_hours": data_age_hours,
+        "last_grid_update": last_grid_update,
     }
     return render(request, "dashboard/weather_map.html", context)
-
 
 @login_required(login_url="/login/")
 def map_sites_json(request):
