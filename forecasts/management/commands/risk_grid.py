@@ -11,10 +11,10 @@ sums into numpy arrays and discarding raw API data before fetching the
 next model. Peak memory is O(1 model) not O(all models).
 
 Usage:
-    python manage.py risk_grid                    # Default 0.5° grid, all models
-    python manage.py risk_grid --resolution 0.25  # Finer grid
-    python manage.py risk_grid --days 2           # 2-day forecast
-    python manage.py risk_grid --batch-size 30    # Smaller batches
+    python manage.py risk_grid                     # Default 0.5° grid, all models
+    python manage.py risk_grid --resolution 0.25   # Finer grid
+    python manage.py risk_grid --days 2            # 2-day forecast
+    python manage.py risk_grid --batch-size 30     # Smaller batches
 
 After completion, run generate_contour_cache to pre-render map images:
     python manage.py generate_contour_cache
@@ -27,7 +27,7 @@ from datetime import datetime, timezone, timedelta
 
 import numpy as np
 import requests
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.conf import settings
 
 from forecasts.models import UKRiskGridRun, UKRiskGridPoint
@@ -36,9 +36,14 @@ from forecasts.engine.core import (
     get_model_weights,
     is_in_domain,
     MODELS_CONFIG,
+    OPENMETEO_HOST,
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# GRID CONFIGURATION
+# ============================================================
 
 # UK bounding box (covers mainland GB + Northern Ireland)
 UK_LAT_MIN = 49.9
@@ -59,11 +64,25 @@ DEFAULT_THRESHOLDS = {
 }
 
 HOURLY_VARS = "wind_speed_10m,wind_gusts_10m,precipitation,temperature_2m"
+
 # Models to use for the grid (subset of MODELS_CONFIG to reduce
 # API calls and memory on constrained environments like Render).
 # UKV = best UK detail, ECMWF = longest horizon backbone,
 # ICON-EU = Europe-wide, ARPEGE = synoptic backbone.
 GRID_MODELS = ["ukv", "ecmwf", "icon_eu", "arpege_europe"]
+
+# How many records to flush to DB at a time
+DB_BATCH_SIZE = 5000
+
+# Seconds to pause between API calls
+BATCH_DELAY = 2.0
+MODEL_DELAY = 5.0
+RATE_LIMIT_WAIT = 60
+
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 
 def _parse_timestamp(t_str):
     """Parse Open-Meteo timestamp string to timezone-aware datetime."""
@@ -94,6 +113,8 @@ def fetch_batch(model_name, lats, lons, start_date, end_date):
     """
     Fetch weather data for MULTIPLE locations in a single API call.
     Returns list of dicts, one per location. Failed locations return None.
+
+    Raises requests.exceptions.HTTPError on non-retryable API errors.
     """
     config = MODELS_CONFIG[model_name]
     api_key = getattr(settings, "OPENMETEO_API_KEY", "")
@@ -109,6 +130,7 @@ def fetch_batch(model_name, lats, lons, start_date, end_date):
         "end_date": end_date,
         **config["params"],
     }
+
     if api_key:
         params["apikey"] = api_key
 
@@ -138,6 +160,10 @@ def fetch_batch(model_name, lats, lons, start_date, end_date):
     return results
 
 
+# ============================================================
+# MANAGEMENT COMMAND
+# ============================================================
+
 class Command(BaseCommand):
     help = "Generate UK-wide multi-model ensemble risk grid for the interactive contour map"
 
@@ -159,8 +185,45 @@ class Command(BaseCommand):
         resolution = options["resolution"]
         num_days = options["days"]
         batch_size = options["batch_size"]
+        grid_run = None
 
-        # Build the grid
+        try:
+            grid_run = self._run_pipeline(resolution, num_days, batch_size)
+        except CommandError:
+            # CommandError already sets grid_run status if applicable
+            raise
+        except Exception as e:
+            # Catch any unexpected error, mark the run as failed, then re-raise
+            # so Render sees a non-zero exit code
+            logger.exception("Unexpected error in risk_grid")
+            if grid_run:
+                grid_run.status = UKRiskGridRun.Status.FAILED
+                grid_run.error_message = f"Unexpected error: {e}"
+                grid_run.save()
+            raise CommandError(f"Unexpected error: {e}")
+
+    def _run_pipeline(self, resolution, num_days, batch_size):
+        """
+        Main pipeline. Returns the UKRiskGridRun on success.
+        Raises CommandError on any failure.
+        """
+
+        # ==============================================================
+        # STARTUP VALIDATION
+        # ==============================================================
+        api_key = getattr(settings, "OPENMETEO_API_KEY", "")
+        self.stdout.write(f"  Open-Meteo host: {OPENMETEO_HOST}")
+        if not api_key:
+            self.stdout.write(self.style.WARNING(
+                "  ⚠ OPENMETEO_API_KEY is not set — using unauthenticated access. "
+                "This WILL be rate-limited on a grid workload."
+            ))
+        else:
+            self.stdout.write(f"  API key: {'*' * 4}{api_key[-4:]}")
+
+        # ==============================================================
+        # BUILD THE GRID
+        # ==============================================================
         lats = np.arange(UK_LAT_MIN, UK_LAT_MAX + resolution, resolution)
         lons = np.arange(UK_LON_MIN, UK_LON_MAX + resolution, resolution)
         grid_points = [
@@ -174,7 +237,7 @@ class Command(BaseCommand):
         start_str = today.strftime("%Y-%m-%d")
         end_str = end_date.strftime("%Y-%m-%d")
 
-        # Build a fast lookup: (lat, lon) -> index in grid_points
+        # Fast lookup: (lat, lon) -> index in grid_points
         point_index = {pt: i for i, pt in enumerate(grid_points)}
 
         # Determine which models cover which grid points
@@ -187,13 +250,19 @@ class Command(BaseCommand):
             if in_domain:
                 model_points[model_name] = in_domain
 
+        if not model_points:
+            raise CommandError(
+                "No models have coverage for any grid points. "
+                "Check GRID_MODELS and DOMAIN_BOUNDS in core.py."
+            )
+
         total_api_calls = sum(
             (len(pts) + batch_size - 1) // batch_size
             for pts in model_points.values()
         )
 
         self.stdout.write(
-            f"Generating UK ensemble risk grid: {len(lats)}×{len(lons)} = "
+            f"\nGenerating UK ensemble risk grid: {len(lats)}×{len(lons)} = "
             f"{total_points} points at {resolution}° resolution"
         )
         self.stdout.write(f"  Period: {today} to {end_date} ({num_days} days)")
@@ -208,15 +277,18 @@ class Command(BaseCommand):
             f"(vs {total_points * len(model_points)} individual)"
         )
 
-        # Pre-compute geographic weights for every grid point
-        # weight_table[point_index][model_name] = weight
+        # ==============================================================
+        # PRE-COMPUTE GEOGRAPHIC WEIGHTS
+        # ==============================================================
         self.stdout.write("  Pre-computing geographic weights...")
         weight_table = []
         for lat, lon in grid_points:
             w = get_model_weights(lat, lon, exposure="urban")
             weight_table.append(w)
 
-        # Create the run record
+        # ==============================================================
+        # CREATE THE RUN RECORD
+        # ==============================================================
         models_used = list(model_points.keys())
         grid_run = UKRiskGridRun.objects.create(
             forecast_date=today,
@@ -230,26 +302,21 @@ class Command(BaseCommand):
             models_used=models_used,
         )
 
-        # Delete previous successful runs for today
-        UKRiskGridRun.objects.filter(
-            forecast_date=today,
-            status=UKRiskGridRun.Status.SUCCESS,
-        ).exclude(pk=grid_run.pk).delete()
-
         start_time = time.time()
 
-        # ============================================================
-        # PHASE 1: Fetch first model to determine the timestamp axis
-        # ============================================================
-        # We need to know num_hours before allocating accumulators.
-        # Fetch ECMWF first (longest horizon, always available).
+        # ==============================================================
+        # PHASE 1: PROBE FOR TIMESTAMP AXIS
+        # ==============================================================
         probe_model = "ecmwf" if "ecmwf" in model_points else next(iter(model_points))
         probe_pts = model_points[probe_model][:1]
+        self.stdout.write(
+            f"\n  Probing {MODELS_CONFIG[probe_model]['name']} for timestamp axis..."
+        )
 
-        self.stdout.write(f"\n  Probing {MODELS_CONFIG[probe_model]['name']} for timestamp axis...")
         try:
             probe_result = fetch_batch(
-                probe_model, [probe_pts[0][0]], [probe_pts[0][1]],
+                probe_model,
+                [probe_pts[0][0]], [probe_pts[0][1]],
                 start_str, end_str,
             )
             time.sleep(1.0)
@@ -257,46 +324,46 @@ class Command(BaseCommand):
             grid_run.status = UKRiskGridRun.Status.FAILED
             grid_run.error_message = f"Probe failed: {e}"
             grid_run.save()
-            self.stderr.write(self.style.ERROR(f"  ✗ Probe failed: {e}"))
-            return
+            raise CommandError(f"Probe API call failed: {e}")
 
         if not probe_result or probe_result[0] is None:
             grid_run.status = UKRiskGridRun.Status.FAILED
             grid_run.error_message = "Probe returned no data"
             grid_run.save()
-            self.stderr.write(self.style.ERROR("  ✗ Probe returned no data"))
-            return
+            raise CommandError(
+                "Probe returned no data. Check API key and endpoint. "
+                f"Model: {probe_model}, URL: {MODELS_CONFIG[probe_model]['url']}"
+            )
 
         ref_times = probe_result[0]["time"]
         num_hours = len(ref_times)
         self.stdout.write(f"  Timestamp axis: {num_hours} hours")
 
-        # ============================================================
-        # PHASE 2: Allocate numpy accumulators
-        # ============================================================
-        # Shape: (total_points, num_hours)
-        # We accumulate weighted sums and total weights, then divide.
+        # ==============================================================
+        # PHASE 2: ALLOCATE NUMPY ACCUMULATORS
+        # ==============================================================
         acc_wind = np.zeros((total_points, num_hours), dtype=np.float32)
         acc_gust = np.zeros((total_points, num_hours), dtype=np.float32)
         acc_prcp = np.zeros((total_points, num_hours), dtype=np.float32)
         acc_temp = np.zeros((total_points, num_hours), dtype=np.float32)
-        acc_wt   = np.zeros((total_points, num_hours), dtype=np.float32)
+        acc_wt = np.zeros((total_points, num_hours), dtype=np.float32)
 
+        mem_mb = total_points * num_hours * 5 * 4 / 1024 / 1024
         self.stdout.write(
-            f"  Accumulators: {total_points}×{num_hours} = "
-            f"{total_points * num_hours * 5 * 4 / 1024 / 1024:.1f} MB"
+            f"  Accumulators: {total_points}×{num_hours} = {mem_mb:.1f} MB"
         )
 
-        # ============================================================
-        # PHASE 3: Fetch each model, accumulate, discard
-        # ============================================================
+        # ==============================================================
+        # PHASE 3: FETCH EACH MODEL, ACCUMULATE, DISCARD
+        # ==============================================================
         api_calls_made = 0
         successful_models = []
+        total_pts_ok = 0
+        total_pts_fail = 0
 
         for model_name, points in model_points.items():
             model_display = MODELS_CONFIG[model_name]["name"]
             n_batches = (len(points) + batch_size - 1) // batch_size
-
             self.stdout.write(
                 f"\n  Fetching {model_display} "
                 f"({len(points)} pts, {n_batches} batches)..."
@@ -322,9 +389,10 @@ class Command(BaseCommand):
                 except requests.exceptions.HTTPError as e:
                     if e.response is not None and e.response.status_code == 429:
                         self.stdout.write(self.style.WARNING(
-                            f"    ⚠ Rate limited! Waiting 60s..."
+                            f"    ⚠ Rate limited on batch {batch_idx + 1}/{n_batches}! "
+                            f"Waiting {RATE_LIMIT_WAIT}s..."
                         ))
-                        time.sleep(60)
+                        time.sleep(RATE_LIMIT_WAIT)
                         try:
                             results = fetch_batch(
                                 model_name, batch_lats, batch_lons,
@@ -337,14 +405,14 @@ class Command(BaseCommand):
                             ))
                     else:
                         self.stdout.write(self.style.ERROR(
-                            f"    ✗ Batch {batch_idx+1} failed: {e}"
+                            f"    ✗ Batch {batch_idx + 1}/{n_batches} HTTP error: {e}"
                         ))
                 except Exception as e:
                     self.stdout.write(self.style.ERROR(
-                        f"    ✗ Batch {batch_idx+1} failed: {e}"
+                        f"    ✗ Batch {batch_idx + 1}/{n_batches} failed: {e}"
                     ))
 
-                # Accumulate results into numpy arrays immediately
+                # Accumulate results into numpy arrays
                 if results:
                     for result in results:
                         if result is None:
@@ -357,7 +425,6 @@ class Command(BaseCommand):
                             model_pts_fail += 1
                             continue
 
-                        # Get this model's weight for this grid point
                         w = weight_table[idx].get(model_name, 0.0)
                         if w <= 0:
                             continue
@@ -378,50 +445,67 @@ class Command(BaseCommand):
                             acc_gust[idx, t] += w * gv
                             acc_prcp[idx, t] += w * pv
                             acc_temp[idx, t] += w * tv
-                            acc_wt[idx, t]   += w
+                            acc_wt[idx, t] += w
 
                         model_pts_ok += 1
                 else:
                     model_pts_fail += len(batch_pts)
 
-                # Pause between batches
-                time.sleep(2.0)
+                # Progress logging every 5 batches
+                if (batch_idx + 1) % 5 == 0 or batch_idx == n_batches - 1:
+                    self.stdout.write(
+                        f"    Batch {batch_idx + 1}/{n_batches} complete "
+                        f"({model_pts_ok} OK, {model_pts_fail} failed)"
+                    )
+
+                # Pause between batches to respect rate limits
+                time.sleep(BATCH_DELAY)
 
             # Log model result
+            total_pts_ok += model_pts_ok
+            total_pts_fail += model_pts_fail
+
             if model_pts_ok > 0:
                 successful_models.append(model_name)
                 self.stdout.write(self.style.SUCCESS(
-                    f"    ✓ {model_display}: {model_pts_ok} pts OK"
+                    f"  ✓ {model_display}: {model_pts_ok} pts OK"
                     + (f", {model_pts_fail} failed" if model_pts_fail else "")
                 ))
             else:
                 self.stdout.write(self.style.ERROR(
-                    f"    ✗ {model_display}: ALL points failed"
+                    f"  ✗ {model_display}: ALL {model_pts_fail} points failed"
                 ))
 
-            # Force garbage collection after each model
+            # Free memory after each model
             gc.collect()
 
             # Pause between models
-            time.sleep(5.0)
+            time.sleep(MODEL_DELAY)
 
+        # Check we got at least some data
         if not successful_models:
             grid_run.status = UKRiskGridRun.Status.FAILED
-            grid_run.error_message = "All models failed"
+            grid_run.error_message = (
+                f"All {len(model_points)} models failed. "
+                f"API calls made: {api_calls_made}. "
+                f"Check OPENMETEO_API_KEY and network connectivity."
+            )
             grid_run.save()
-            self.stderr.write(self.style.ERROR("  ✗ All models failed"))
-            return
+            raise CommandError(
+                f"All models failed after {api_calls_made} API calls. "
+                f"Host: {OPENMETEO_HOST}, "
+                f"API key set: {bool(getattr(settings, 'OPENMETEO_API_KEY', ''))}"
+            )
 
-        # ============================================================
-        # PHASE 4: Normalise and compute risk scores, build DB records
-        # ============================================================
+        # ==============================================================
+        # PHASE 4: NORMALISE AND COMPUTE RISK SCORES
+        # ==============================================================
         self.stdout.write(
             f"\n  Normalising ensemble from {len(successful_models)} models "
             f"and computing risk scores..."
         )
 
         # Normalise: divide accumulated sums by total weight
-        # Where weight is 0, values stay 0
         mask = acc_wt > 0
         acc_wind = np.where(mask, acc_wind / acc_wt, 0.0)
         acc_gust = np.where(mask, acc_gust / acc_wt, 0.0)
@@ -432,10 +516,10 @@ class Command(BaseCommand):
         del acc_wt
         gc.collect()
 
-        # Build DB records in chunks to limit memory
+        # Build DB records in chunks
         all_point_records = []
         blend_errors = 0
-        DB_BATCH = 5000
+        records_flushed = 0
 
         for pt_idx, (lat, lon) in enumerate(grid_points):
             if not mask[pt_idx].any():
@@ -465,50 +549,80 @@ class Command(BaseCommand):
                     risk=round(risk, 2),
                 ))
 
-            # Flush to DB periodically to limit in-memory records
-            if len(all_point_records) >= DB_BATCH:
-                UKRiskGridPoint.objects.bulk_create(all_point_records)
-                self.stdout.write(
-                    f"    Flushed {len(all_point_records)} records to DB "
-                    f"({pt_idx + 1}/{total_points} points)"
-                )
-                all_point_records = []
+                # Flush to DB periodically to limit in-memory records
+                if len(all_point_records) >= DB_BATCH_SIZE:
+                    UKRiskGridPoint.objects.bulk_create(all_point_records)
+                    records_flushed += len(all_point_records)
+                    self.stdout.write(
+                        f"    Flushed {records_flushed} records to DB "
+                        f"({pt_idx + 1}/{total_points} points processed)"
+                    )
+                    all_point_records = []
 
         # Flush remaining
         if all_point_records:
             UKRiskGridPoint.objects.bulk_create(all_point_records)
+            records_flushed += len(all_point_records)
 
         # Free numpy arrays
         del acc_wind, acc_gust, acc_prcp, acc_temp, mask
         gc.collect()
 
-        # ============================================================
-        # PHASE 5: Finalise
-        # ============================================================
-        successful = total_points - blend_errors
+        # ==============================================================
+        # PHASE 5: FINALISE
+        # ==============================================================
+        successful_points = total_points - blend_errors
         total_records = UKRiskGridPoint.objects.filter(run=grid_run).count()
 
-        if total_records > 0:
-            grid_run.status = UKRiskGridRun.Status.SUCCESS
-            grid_run.num_hours = num_hours
-            grid_run.models_used = successful_models
-            grid_run.save()
-
-            elapsed = time.time() - start_time
-            self.stdout.write(self.style.SUCCESS(
-                f"\n  ✓ Complete: {total_records} records "
-                f"({successful} points, {blend_errors} skipped) "
-                f"in {elapsed:.0f}s using {api_calls_made} API calls "
-                f"across {len(successful_models)} models"
-            ))
-            self.stdout.write(
-                f"  Models: "
-                f"{', '.join(MODELS_CONFIG[m]['name'] for m in successful_models)}"
-            )
-        else:
+        if total_records == 0:
             grid_run.status = UKRiskGridRun.Status.FAILED
-            grid_run.error_message = "No data produced after blending"
-            grid_run.save()
-            self.stderr.write(
-                self.style.ERROR("  ✗ No data produced after blending")
+            grid_run.error_message = (
+                f"No data produced after blending. "
+                f"Models OK: {successful_models}, "
+                f"blend_errors: {blend_errors}/{total_points}"
             )
+            grid_run.save()
+            raise CommandError(
+                f"No data produced after blending {len(successful_models)} models. "
+                f"{blend_errors}/{total_points} points had zero weight."
+            )
+
+        # Mark run as successful
+        grid_run.status = UKRiskGridRun.Status.SUCCESS
+        grid_run.num_hours = num_hours
+        grid_run.models_used = successful_models
+        grid_run.save()
+
+        elapsed = time.time() - start_time
+
+        # Clean up old runs AFTER the new one is confirmed successful
+        old_runs = UKRiskGridRun.objects.filter(
+            forecast_date=today,
+            status=UKRiskGridRun.Status.SUCCESS,
+        ).exclude(pk=grid_run.pk)
+        old_count = old_runs.count()
+        if old_count > 0:
+            old_runs.delete()
+            self.stdout.write(f"  Cleaned up {old_count} previous run(s) for today")
+
+        # Also clean up old failed runs (keep last 5 for debugging)
+        failed_runs = UKRiskGridRun.objects.filter(
+            status=UKRiskGridRun.Status.FAILED,
+        ).order_by("-forecast_date")
+        if failed_runs.count() > 5:
+            stale_failed = failed_runs[5:]
+            stale_ids = list(stale_failed.values_list("pk", flat=True))
+            UKRiskGridRun.objects.filter(pk__in=stale_ids).delete()
+
+        self.stdout.write(self.style.SUCCESS(
+            f"\n  ✓ Complete: {total_records} records "
+            f"({successful_points} points, {blend_errors} skipped) "
+            f"in {elapsed:.0f}s using {api_calls_made} API calls "
+            f"across {len(successful_models)} models"
+        ))
+        self.stdout.write(
+            f"  Models: "
+            f"{', '.join(MODELS_CONFIG[m]['name'] for m in successful_models)}"
+        )
+
+        return grid_run
