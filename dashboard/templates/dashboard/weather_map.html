@@ -13,6 +13,17 @@
 .footer { display:none; }
 .map-app { display:flex; flex-direction:column; height:calc(100vh - 64px); }
 
+/* --- Stale data banner --- */
+.stale-banner {
+    background: #e65100;
+    color: #fff;
+    padding: 6px 1rem;
+    text-align: center;
+    font-size: 0.85rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+
 /* --- Top bar --- */
 .tbar { background:var(--ocean-mid); border-bottom:1px solid var(--border); padding:0 1rem; height:46px; display:flex; align-items:center; justify-content:space-between; gap:0.75rem; z-index:600; }
 .tbar-l { display:flex; align-items:center; gap:0.8rem; }
@@ -115,6 +126,14 @@
 {% block content %}
 <div class="map-app">
 
+    {% if data_age_hours and data_age_hours > 8 %}
+    <div class="stale-banner">
+        ⚠ Map data is {{ data_age_hours }} hours old
+        (last updated {{ last_grid_update|date:"D j M H:i" }} UTC).
+        Forecasts may not reflect current conditions.
+    </div>
+    {% endif %}
+
     <div class="tbar">
         <div class="tbar-l">
             <span class="tbar-brand">🗺️ Weather Map</span>
@@ -180,18 +199,10 @@
     var CONTOUR_URL= '{% url "dashboard:map_contour_image" %}';
     var TS_URL     = '{% url "dashboard:map_contour_timestamps" %}';
 
-    // UK bounding box for the image overlay (must match map_interpolation.py)
     var UK_BOUNDS = [[49.9, -7.6], [58.7, 1.8]];
-
-    // Timeout for contour image loading (ms)
     var IMAGE_TIMEOUT = 15000;
-
-    // How many frames ahead to preload
     var PRELOAD_AHEAD = 6;
 
-    /* ================================================================
-       RISK CALC — mirror of core.py (for site marker colours)
-       ================================================================ */
     function ramp(v,s,h,hb){
         if(hb){if(v<=s)return 0;if(v>=h)return 1;return(v-s)/(h-s);}
         else{if(v>=s)return 0;if(v<=h)return 1;return(s-v)/(s-h);}
@@ -203,9 +214,6 @@
     }
     function recOf(r){return r<20?'GO':r<50?'CAUTION':'CANCEL';}
 
-    /* ================================================================
-       COLOUR SCALES (for legend only)
-       ================================================================ */
     var SC={
         risk:  {t:'Risk %',     s:[[0,[34,197,94],'0%'],[20,[34,197,94],'20%'],[50,[245,158,11],'50%'],[100,[185,28,28],'100%']]},
         wind:  {t:'Wind m/s',   s:[[0,[51,65,85],'0'],[7,[34,197,94],'7'],[10,[245,158,11],'10'],[25,[185,28,28],'25+']]},
@@ -214,9 +222,6 @@
         temp:  {t:'Temp °C',    s:[[-5,[37,99,235],'-5'],[2,[147,197,253],'2'],[15,[251,191,36],'15'],[25,[239,68,68],'25+']]}
     };
 
-    /* ================================================================
-       MAP SETUP
-       ================================================================ */
     var map = L.map('wmap', {
         center: [54.5, -2.5],
         zoom: 6,
@@ -231,9 +236,6 @@
         maxZoom: 20
     }).addTo(map);
 
-    /* ================================================================
-       CONTOUR IMAGE OVERLAY (with preloading + timeout)
-       ================================================================ */
     var contourLayer = null;
     var imageCache = {};
     var hasServerCache = false;
@@ -280,17 +282,12 @@
         contourLayer.addTo(map);
     }
 
-    /**
-     * Load a contour image WITH TIMEOUT.
-     * Always resolves (never rejects) — the map loads regardless.
-     */
     function loadContourImage(timestamp, varName) {
         if (!contourAvailable) return Promise.resolve();
 
         var url = contourUrl(timestamp, varName);
-
-        // If already fully cached, show instantly
         var cached = imageCache[url];
+
         if (cached && typeof cached === 'object' && cached.complete) {
             setContourOverlay(url);
             return Promise.resolve();
@@ -305,7 +302,6 @@
                 resolve();
             }
 
-            // TIMEOUT: resolve anyway after IMAGE_TIMEOUT ms
             var timer = setTimeout(function() {
                 console.warn('Contour image timed out (' + IMAGE_TIMEOUT + 'ms):', url);
                 finish();
@@ -329,9 +325,6 @@
         });
     }
 
-    /* ================================================================
-       SITE MARKERS
-       ================================================================ */
     var siteCluster = L.markerClusterGroup({
         maxClusterRadius: 28,
         disableClusteringAtZoom: 9,
@@ -340,58 +333,68 @@
     map.addLayer(siteCluster);
 
     function mkI(rec){
-        var c = rec==='GO'?'sm-go':rec==='CAUTION'?'sm-ca':rec==='CANCEL'?'sm-cx':'sm-pn';
-        var l = rec==='PENDING'?'?':rec.charAt(0);
-        return L.divIcon({className:'',iconSize:[26,26],iconAnchor:[13,26],popupAnchor:[0,-22],
-            html:'<div class="sm '+c+'"><span class="sm-i">'+l+'</span></div>'});
+        var c = rec === 'GO' ? 'sm-go' : rec === 'CAUTION' ? 'sm-ca' : rec === 'CANCEL' ? 'sm-cx' : 'sm-pn';
+        var l = rec === 'PENDING' ? '?' : rec.charAt(0);
+        return L.divIcon({
+            className:'',
+            iconSize:[26,26],
+            iconAnchor:[13,26],
+            popupAnchor:[0,-22],
+            html:'<div class="sm ' + c + '"><span class="sm-i">' + l + '</span></div>'
+        });
     }
 
-    function fv(v,u){return v!=null?v+u:'—';}
-    function bcls(r){return r==='GO'?'pp-bgo':r==='CAUTION'?'pp-bca':r==='CANCEL'?'pp-bcx':'pp-bpn';}
+    function fv(v,u){return v != null ? v + u : '—';}
+    function bcls(r){return r === 'GO' ? 'pp-bgo' : r === 'CAUTION' ? 'pp-bca' : r === 'CANCEL' ? 'pp-bcx' : 'pp-bpn';}
 
     function popSum(p){
-        var r=p.recommendation||'PENDING';
-        var bd='';
-        if(p.has_forecast){
-            bd='<div class="pp-gr">'+
-            '<div><span class="pp-sl">Peak Risk</span><div class="pp-sv">'+fv(p.peak_risk,'%')+'</div></div>'+
-            '<div><span class="pp-sl">Peak Wind</span><div class="pp-sv">'+fv(p.peak_wind,' m/s')+'</div></div>'+
-            '<div><span class="pp-sl">Peak Gust</span><div class="pp-sv">'+fv(p.peak_gust,' m/s')+'</div></div>'+
-            '<div><span class="pp-sl">Precip</span><div class="pp-sv">'+fv(p.peak_precip,' mm/h')+'</div></div>'+
-            '<div><span class="pp-sl">Min Temp</span><div class="pp-sv">'+fv(p.min_temp,'°C')+'</div></div>'+
-            '<div><span class="pp-sl">Exposure</span><div class="pp-sv">'+(p.exposure||'—')+'</div></div></div>';
-            var dt='';
-            if(p.forecast_date){var d=new Date(p.forecast_date+'T00:00');dt=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});}
-            bd+='<div class="pp-ft"><span>'+dt+'</span><a href="/dashboard/site/'+p.id+'/" class="pp-lk">Full Forecast →</a></div>';
+        var r = p.recommendation || 'PENDING';
+        var bd = '';
+
+        if (p.has_forecast) {
+            bd = '<div class="pp-gr">' +
+                '<div><span class="pp-sl">Peak Risk</span><div class="pp-sv">' + fv(p.peak_risk,'%') + '</div></div>' +
+                '<div><span class="pp-sl">Peak Wind</span><div class="pp-sv">' + fv(p.peak_wind,' m/s') + '</div></div>' +
+                '<div><span class="pp-sl">Peak Gust</span><div class="pp-sv">' + fv(p.peak_gust,' m/s') + '</div></div>' +
+                '<div><span class="pp-sl">Precip</span><div class="pp-sv">' + fv(p.peak_precip,' mm/h') + '</div></div>' +
+                '<div><span class="pp-sl">Min Temp</span><div class="pp-sv">' + fv(p.min_temp,'°C') + '</div></div>' +
+                '<div><span class="pp-sl">Exposure</span><div class="pp-sv">' + (p.exposure || '—') + '</div></div></div>';
+
+            var dt = '';
+            if (p.forecast_date) {
+                var d = new Date(p.forecast_date + 'T00:00');
+                dt = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+            }
+
+            bd += '<div class="pp-ft"><span>' + dt + '</span><a href="/dashboard/site/' + p.id + '/" class="pp-lk">Full Forecast →</a></div>';
         } else {
-            bd='<div style="text-align:center;padding:0.4rem 0;color:var(--text-secondary);font-size:0.8rem">No forecast yet</div>'+
-            '<div class="pp-ft"><span></span><a href="/dashboard/site/'+p.id+'/" class="pp-lk">View →</a></div>';
+            bd = '<div style="text-align:center;padding:0.4rem 0;color:var(--text-secondary);font-size:0.8rem">No forecast yet</div>' +
+                '<div class="pp-ft"><span></span><a href="/dashboard/site/' + p.id + '/" class="pp-lk">View →</a></div>';
         }
-        return '<div class="pp-hd"><div><div class="pp-nm">'+p.name+'</div><div class="pp-sub">'+p.client+' · '+p.postcode+'</div></div>'+
-        '<span class="pp-bg '+bcls(r)+'">'+r+'</span></div><div class="pp-bd">'+bd+'</div>';
+
+        return '<div class="pp-hd"><div><div class="pp-nm">' + p.name + '</div><div class="pp-sub">' + p.client + ' · ' + p.postcode + '</div></div>' +
+            '<span class="pp-bg ' + bcls(r) + '">' + r + '</span></div><div class="pp-bd">' + bd + '</div>';
     }
 
     function popHr(p,ts){
-        var risk=cRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
-        var r=recOf(risk);
-        var d=new Date(ts);
-        var tm=d.getUTCHours().toString().padStart(2,'0')+':'+d.getUTCMinutes().toString().padStart(2,'0')+' UTC';
-        var dt=d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
-        return '<div class="pp-hd"><div><div class="pp-nm">'+p.name+'</div><div class="pp-sub">'+p.client+' · '+p.postcode+'</div></div>'+
-        '<span class="pp-bg '+bcls(r)+'">'+r+'</span></div>'+
-        '<div class="pp-bd"><div class="pp-gr">'+
-        '<div><span class="pp-sl">Risk</span><div class="pp-sv">'+risk.toFixed(0)+'%</div></div>'+
-        '<div><span class="pp-sl">Wind</span><div class="pp-sv">'+p.wind_speed+' m/s</div></div>'+
-        '<div><span class="pp-sl">Gusts</span><div class="pp-sv">'+p.wind_gusts+' m/s</div></div>'+
-        '<div><span class="pp-sl">Precip</span><div class="pp-sv">'+p.precipitation+' mm</div></div>'+
-        '<div><span class="pp-sl">Temp</span><div class="pp-sv">'+p.temperature+'°C</div></div>'+
-        '<div><span class="pp-sl">Time</span><div class="pp-sv">'+tm+'</div></div></div>'+
-        '<div class="pp-ft"><span>'+dt+'</span><a href="/dashboard/site/'+p.id+'/" class="pp-lk">Full Forecast →</a></div></div>';
+        var risk = cRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
+        var r = recOf(risk);
+        var d = new Date(ts);
+        var tm = d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0') + ' UTC';
+        var dt = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+
+        return '<div class="pp-hd"><div><div class="pp-nm">' + p.name + '</div><div class="pp-sub">' + p.client + ' · ' + p.postcode + '</div></div>' +
+            '<span class="pp-bg ' + bcls(r) + '">' + r + '</span></div>' +
+            '<div class="pp-bd"><div class="pp-gr">' +
+            '<div><span class="pp-sl">Risk</span><div class="pp-sv">' + risk.toFixed(0) + '%</div></div>' +
+            '<div><span class="pp-sl">Wind</span><div class="pp-sv">' + p.wind_speed + ' m/s</div></div>' +
+            '<div><span class="pp-sl">Gusts</span><div class="pp-sv">' + p.wind_gusts + ' m/s</div></div>' +
+            '<div><span class="pp-sl">Precip</span><div class="pp-sv">' + p.precipitation + ' mm</div></div>' +
+            '<div><span class="pp-sl">Temp</span><div class="pp-sv">' + p.temperature + '°C</div></div>' +
+            '<div><span class="pp-sl">Time</span><div class="pp-sv">' + tm + '</div></div></div>' +
+            '<div class="pp-ft"><span>' + dt + '</span><a href="/dashboard/site/' + p.id + '/" class="pp-lk">Full Forecast →</a></div></div>';
     }
 
-    /* ================================================================
-       STATE
-       ================================================================ */
     var gridTimestamps = [];
     var siteGJ = null;
     var hourlyD = null;
@@ -405,9 +408,6 @@
     var $bhour = document.getElementById('bhour');
     var $bsub  = document.getElementById('bsub');
 
-    /* ================================================================
-       DATA LOADING (with timeouts on fetch)
-       ================================================================ */
     function fetchWithTimeout(url, timeoutMs) {
         return Promise.race([
             fetch(url).then(function(r) { return r.json(); }),
@@ -446,21 +446,18 @@
             .catch(function(e) { console.warn('hourly:', e); });
     }
 
-    /* ================================================================
-       RENDER SITES for a given timestamp index
-       ================================================================ */
     function renderSites(idx) {
         siteCluster.clearLayers();
 
-        var useHourly = hourlyD && hourlyD.timestamps && hourlyD.timestamps.length > 0
-                        && idx < hourlyD.timestamps.length;
+        var useHourly = hourlyD && hourlyD.timestamps && hourlyD.timestamps.length > 0 && idx < hourlyD.timestamps.length;
 
         if (useHourly) {
             var ts = hourlyD.timestamps[idx];
             var frame = hourlyD.frames[ts];
             if (frame && frame.features) {
                 frame.features.forEach(function(f) {
-                    var c = f.geometry.coordinates, p = f.properties;
+                    var c = f.geometry.coordinates;
+                    var p = f.properties;
                     var risk = cRisk(p.wind_speed, p.wind_gusts, p.precipitation, p.temperature);
                     var rec = recOf(risk);
                     var m = L.marker([c[1], c[0]], {icon: mkI(rec)});
@@ -470,7 +467,8 @@
             }
         } else if (siteGJ && siteGJ.features) {
             siteGJ.features.forEach(function(f) {
-                var c = f.geometry.coordinates, p = f.properties;
+                var c = f.geometry.coordinates;
+                var p = f.properties;
                 var m = L.marker([c[1], c[0]], {icon: mkI(p.recommendation || 'PENDING')});
                 m.bindPopup(popSum(p), {maxWidth: 290, minWidth: 230});
                 siteCluster.addLayer(m);
@@ -478,9 +476,6 @@
         }
     }
 
-    /* ================================================================
-       RENDER FRAME (contour image + sites + UI)
-       ================================================================ */
     function renderFrame(idx) {
         if (!gridTimestamps.length) return;
 
@@ -489,39 +484,27 @@
         var d = new Date(ts);
 
         $bdate.textContent = d.toLocaleDateString('en-GB', {weekday:'short', day:'numeric', month:'short', year:'numeric'});
-        $bhour.textContent = d.getUTCHours().toString().padStart(2,'0') + ':' +
-                             d.getUTCMinutes().toString().padStart(2,'0') + ' UTC';
+        $bhour.textContent = d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0') + ' UTC';
         $bsub.textContent = 'Hour ' + (curIdx + 1) + '/' + gridTimestamps.length;
         $rng.value = curIdx;
 
-        // Load the contour image using full ISO timestamp
         loadContourImage(ts, curVar);
-
-        // Preload upcoming frames
         preloadAhead(curIdx, curVar);
-
-        // Update site markers
         renderSites(curIdx);
     }
 
-    /* ================================================================
-       LEGEND
-       ================================================================ */
     function renderLgnd() {
         var s = SC[curVar];
         var h = '<div class="lgnd-t">' + s.t + '</div>';
         s.s.forEach(function(st) {
-            h += '<div class="lgnd-r"><span class="lgnd-s" style="background:rgba('+st[1][0]+','+st[1][1]+','+st[1][2]+',0.7)"></span>' +
+            h += '<div class="lgnd-r"><span class="lgnd-s" style="background:rgba(' + st[1][0] + ',' + st[1][1] + ',' + st[1][2] + ',0.7)"></span>' +
                  '<span class="lgnd-l">' + st[2] + '</span></div>';
         });
         document.getElementById('lgnd').innerHTML = h;
     }
 
-    /* ================================================================
-       CONTROLS
-       ================================================================ */
     $rng.addEventListener('input', function() {
-        renderFrame(parseInt(this.value));
+        renderFrame(parseInt(this.value, 10));
     });
 
     document.getElementById('bback').addEventListener('click', function() {
@@ -549,7 +532,10 @@
     }
 
     function stopP() {
-        if (playTmr) { clearInterval(playTmr); playTmr = null; }
+        if (playTmr) {
+            clearInterval(playTmr);
+            playTmr = null;
+        }
         var b = document.getElementById('bplay');
         b.textContent = '▶';
         b.classList.remove('on');
@@ -559,10 +545,12 @@
         playSpeedIdx = (playSpeedIdx + 1) % playSpeeds.length;
         var labels = ['1×', '2×', '3×', '0.5×'];
         this.textContent = labels[playSpeedIdx];
-        if (playTmr) { stopP(); startP(); }
+        if (playTmr) {
+            stopP();
+            startP();
+        }
     });
 
-    // Variable pills
     document.querySelectorAll('.pill').forEach(function(btn) {
         btn.addEventListener('click', function() {
             document.querySelectorAll('.pill').forEach(function(b) { b.classList.remove('on'); });
@@ -574,26 +562,17 @@
         });
     });
 
-    /* ================================================================
-       PRELOAD ALL FRAMES (if server cache exists)
-       ================================================================ */
     function preloadAllFrames(varName) {
         gridTimestamps.forEach(function(ts) {
             preloadImage(contourUrl(ts, varName));
         });
     }
 
-    /* ================================================================
-       DISMISS LOADING OVERLAY
-       ================================================================ */
     function dismissLoading() {
         document.getElementById('mfill').style.width = '100%';
         document.getElementById('mload').classList.add('done');
     }
 
-    /* ================================================================
-       BOOT — RESILIENT: map always loads, even if contour fails
-       ================================================================ */
     renderLgnd();
     var $fill = document.getElementById('mfill');
     var $txt  = document.getElementById('mtxt');
@@ -601,7 +580,6 @@
     $fill.style.width = '30%';
     $txt.textContent = 'Loading map data…';
 
-    // *** SAFETY NET: always dismiss loading after 20s max ***
     var bootTimeout = setTimeout(function() {
         console.warn('Boot safety timeout reached — showing map without contour');
         document.getElementById('gstatus').textContent = 'Loaded (contour still rendering…)';
@@ -625,7 +603,6 @@
         if (gridTimestamps.length) {
             $rng.max = gridTimestamps.length - 1;
             $rng.value = 0;
-            // Load first frame — has built-in IMAGE_TIMEOUT
             return loadContourImage(gridTimestamps[0], curVar);
         }
     }).then(function() {
@@ -641,13 +618,12 @@
             preloadAllFrames(curVar);
         }
 
-        // Fit to sites if available
         if (siteGJ && siteGJ.features && siteGJ.features.length) {
             var la = siteGJ.features.map(function(f) { return f.geometry.coordinates[1]; });
             var lo = siteGJ.features.map(function(f) { return f.geometry.coordinates[0]; });
             map.fitBounds([
-                [Math.min.apply(null, la) - .8, Math.min.apply(null, lo) - .8],
-                [Math.max.apply(null, la) + .8, Math.max.apply(null, lo) + .8]
+                [Math.min.apply(null, la) - 0.8, Math.min.apply(null, lo) - 0.8],
+                [Math.max.apply(null, la) + 0.8, Math.max.apply(null, lo) + 0.8]
             ], {maxZoom: 9});
         }
 
@@ -655,13 +631,11 @@
     }).catch(function(e) {
         console.error('Boot error:', e);
         clearTimeout(bootTimeout);
-        // *** STILL show the map — just without contour overlay ***
         document.getElementById('gstatus').textContent = 'Map loaded (contour unavailable)';
         renderSites(0);
         dismissLoading();
     });
 
-    // Refresh site data every 5 mins
     setInterval(function() {
         loadSites();
         loadHourly();
