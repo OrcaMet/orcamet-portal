@@ -252,9 +252,9 @@ def weather_map(request):
     data_age_hours = None
     last_grid_update = None
     if latest_grid_run:
-        age = timezone.now() - latest_grid_run.created_at
+        age = timezone.now() - latest_grid_run.generated_at
         data_age_hours = int(age.total_seconds() / 3600)
-        last_grid_update = latest_grid_run.created_at
+        last_grid_update = latest_grid_run.generated_at
 
     context = {
         "user": user,
