@@ -15,7 +15,7 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
 
-from forecasts.models import ForecastRun, HourlyForecast
+from forecasts.models import ForecastRun, HourlyForecast, UKRiskGridRun
 from sites.models import Site
 
 
