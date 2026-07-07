@@ -27,7 +27,9 @@ SECRET_KEY = os.environ.get(
     "SECRET_KEY",
     "django-insecure-dev-only-change-me-in-production"
 )
-
+# Signed-cookie sessions: removes a DB query from every request.
+# Safe here — accounts/views.py stores only three short strings.
+SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
 # Debug is True locally, False on Render
 DEBUG = "RENDER" not in os.environ
 
@@ -71,7 +73,7 @@ INSTALLED_APPS = [
 # ============================================================
 
 MIDDLEWARE = [
-    "django.middleware.security.SecurityMiddleware",
+    "django.middleware..Middleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
