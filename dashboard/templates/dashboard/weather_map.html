@@ -238,15 +238,19 @@
 
     var contourLayer = null;
     var imageCache = {};
+    var gridRunKey = '';
     var hasServerCache = false;
+    gridRunKey = d.run_key || d.generated_at || '';
     var contourAvailable = true;
 
-    function contourUrl(timestamp, varName) {
+function contourUrl(timestamp, varName) {
         var url = CONTOUR_URL + '?var=' + varName;
         if (timestamp) {
             url += '&timestamp=' + encodeURIComponent(timestamp);
         }
-        url += '&resolution=300';
+        if (gridRunKey) {
+            url += '&run=' + encodeURIComponent(gridRunKey);
+        }
         return url;
     }
 
