@@ -551,7 +551,9 @@ class Command(BaseCommand):
 
                 # Flush to DB periodically to limit in-memory records
                 if len(all_point_records) >= DB_BATCH_SIZE:
-                    UKRiskGridPoint.objects.bulk_create(all_point_records)
+                   UKRiskGridPoint.objects.bulk_create(
+                        all_point_records, batch_size=1000
+                    )
                     records_flushed += len(all_point_records)
                     self.stdout.write(
                         f"    Flushed {records_flushed} records to DB "
@@ -561,7 +563,9 @@ class Command(BaseCommand):
 
         # Flush remaining
         if all_point_records:
-            UKRiskGridPoint.objects.bulk_create(all_point_records)
+           UKRiskGridPoint.objects.bulk_create(
+                        all_point_records, batch_size=1000
+                    )
             records_flushed += len(all_point_records)
 
         # Free numpy arrays
