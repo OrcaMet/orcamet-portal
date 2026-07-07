@@ -644,6 +644,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _latest_grid_run_id():
+    """Cached lookup of the latest successful grid run's pk (60s TTL)."""
+    from django.core.cache import cache
+    from forecasts.models import UKRiskGridRun
+
+    run_id = cache.get("latest_grid_run_id")
+    if run_id is None:
+        run = (
+            UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS)
+            .order_by("-generated_at")
+            .only("pk")
+            .first()
+        )
+        if run is None:
+            return None
+        run_id = run.pk
+        cache.set("latest_grid_run_id", run_id, 60)
+    return run_id
 
 @login_required(login_url="/login/")
 def map_contour_image(request):
