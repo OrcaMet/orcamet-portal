@@ -694,6 +694,48 @@ def map_contour_image(request):
     resolution = int(request.GET.get("resolution", "300"))
 
     # Find latest successful grid run
+# ---- TIMESTAMP REQUEST: cached run id + cached image, no ORM object needed ----
+    if requested_ts:
+        from django.utils.dateparse import parse_datetime
+
+        run_id = _latest_grid_run_id()
+        if run_id is None:
+            return HttpResponse(
+                "No grid data available", status=404, content_type="text/plain"
+            )
+
+        ts = parse_datetime(requested_ts)
+        if not ts:
+            return HttpResponse(
+                "Invalid timestamp", status=400, content_type="text/plain"
+            )
+
+        cached = CachedContourImage.objects.filter(
+            run_id=run_id,
+            timestamp=ts,
+            variable=var_name,
+        ).first()
+
+        if cached and cached.image_data:
+            response = HttpResponse(
+                bytes(cached.image_data),
+                content_type="image/png",
+            )
+            # Frames are immutable per run; the run key in the URL busts this
+            response["Cache-Control"] = "private, max-age=86400, immutable"
+            return response
+
+        logger.warning(
+            f"No cached contour for {var_name} @ {requested_ts}. "
+            f"Run: python manage.py generate_contour_cache"
+        )
+        return HttpResponse(
+            "Contour not cached. Run generate_contour_cache.",
+            status=404,
+            content_type="text/plain",
+        )
+
+    # ---- PEAK REQUEST (no timestamp): needs the full run object ----
     grid_run = (
         UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS)
         .order_by("-generated_at")
@@ -727,7 +769,7 @@ def map_contour_image(request):
                 bytes(cached.image_data),
                 content_type="image/png",
             )
-            response["Cache-Control"] = "public, max-age=3600"
+            response["Cache-Control"] = "private, max-age=86400, immutable"
             return response
 
         # No cache — return 404 instead of attempting on-the-fly render
