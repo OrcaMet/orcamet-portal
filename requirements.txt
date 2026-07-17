@@ -1,7 +1,6 @@
 # Django core
 django~=5.1
 gunicorn
-uvicorn
 
 # Database
 psycopg2-binary
@@ -15,12 +14,7 @@ requests~=2.31
 # Static files
 whitenoise[brotli]
 
-# Forecast engine
+# Forecast engine (lightweight — no GIS deps needed for site forecasts)
 numpy
 pandas
-
-# Map generation (UK risk contour maps)
-scipy
 matplotlib
-geopandas
-shapely

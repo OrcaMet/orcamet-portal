@@ -27,9 +27,7 @@ SECRET_KEY = os.environ.get(
     "SECRET_KEY",
     "django-insecure-dev-only-change-me-in-production"
 )
-# Signed-cookie sessions: removes a DB query from every request.
-# Safe here — accounts/views.py stores only three short strings.
-SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
+
 # Debug is True locally, False on Render
 DEBUG = "RENDER" not in os.environ
 
@@ -219,8 +217,10 @@ OPENMETEO_API_KEY = os.environ.get("OPENMETEO_API_KEY", "")
 FORECAST_WORK_START_HOUR = 7
 FORECAST_WORK_END_HOUR = 18
 
-# Forecast generation schedule (UTC)
-FORECAST_RUN_TIMES = ["06:00", "14:00"]
+# Forecast generation schedule (UTC) — informational only; the actual
+# schedule is set on the Render cron jobs (orcamet-portal_site_forecasts,
+# orcamet-portal_risk_grid), currently every 6 hours.
+FORECAST_RUN_TIMES = ["00:00", "06:00", "12:00", "18:00"]
 
 # Number of forecast days
 FORECAST_NUM_DAYS = 3

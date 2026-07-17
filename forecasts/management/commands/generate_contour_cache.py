@@ -1,226 +1,97 @@
 """
 OrcaMet Portal — generate_contour_cache management command
 
-Pre-renders contour map PNGs for every (timestamp × variable) combination
-from the latest risk grid run, storing them in the CachedContourImage model
-for instant map animation.
-
-MEMORY-SAFE: Flushes rendered images to the database after each variable
-and calls gc.collect() after every render to prevent matplotlib memory leaks.
+Builds a UK-wide risk contour map: fetches a coarse ensemble grid,
+computes peak work-hour risk per point, renders a contour plot, and
+caches it as a UKRiskMap record for today.
 
 Usage:
-    python manage.py generate_contour_cache                  # Latest run
-    python manage.py generate_contour_cache --resolution 200 # Faster
-    python manage.py generate_contour_cache --variables risk wind
+    python manage.py generate_contour_cache
 """
 
-import gc
+import base64
+import io
 import logging
-import time
 from datetime import datetime, timezone
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
-from django.core.management.base import BaseCommand
-from django.db.models import Max, Min
 
-from forecasts.models import UKRiskGridRun, UKRiskGridPoint, CachedContourImage
+from django.conf import settings
+from django.core.management.base import BaseCommand
+
+from forecasts.engine.uk_grid import build_grid, fetch_grid_ensemble, compute_grid_risk
+from forecasts.models import UKRiskMap
 
 logger = logging.getLogger(__name__)
 
-# Variables to pre-render
-ALL_VARIABLES = ["risk", "wind", "gust", "precip", "temp"]
-
-# Map variable name -> model field
-VARIABLE_FIELD_MAP = {
-    "risk": "risk",
-    "wind": "wind_speed",
-    "gust": "wind_gusts",
-    "precip": "precipitation",
-    "temp": "temperature",
-}
+WORK_START = getattr(settings, "FORECAST_WORK_START_HOUR", 7)
+WORK_END = getattr(settings, "FORECAST_WORK_END_HOUR", 18)
 
 
 class Command(BaseCommand):
-    help = "Pre-render contour map PNGs for instant map animation"
-
-    def add_arguments(self, parser):
-        parser.add_argument(
-            "--resolution", type=int, default=200,
-            help="Interpolation resolution (default: 200). Lower = faster + less memory.",
-        )
-        parser.add_argument(
-            "--variables", nargs="+", default=ALL_VARIABLES,
-            help=f"Variables to render (default: {' '.join(ALL_VARIABLES)})",
-        )
-        parser.add_argument(
-            "--run-id", type=int, default=None,
-            help="Specific UKRiskGridRun ID (default: latest successful)",
-        )
-        parser.add_argument(
-            "--dpi", type=int, default=100,
-            help="Image DPI (default: 100). Lower = less memory.",
-        )
+    help = "Generate the UK-wide risk contour map and cache it as a UKRiskMap record"
 
     def handle(self, *args, **options):
-        resolution = options["resolution"]
-        variables = options["variables"]
-        run_id = options["run_id"]
-        dpi = options["dpi"]
+        today = datetime.now(timezone.utc).date()
 
-        # Lazy import to avoid loading matplotlib at startup
-        from forecasts.engine.map_interpolation import render_contour_to_bytes
+        points = build_grid()
+        self.stdout.write(f"Fetching ensemble for {len(points)} grid points across the UK...")
 
-        # Find the grid run
-        if run_id:
-            try:
-                grid_run = UKRiskGridRun.objects.get(pk=run_id)
-            except UKRiskGridRun.DoesNotExist:
-                self.stderr.write(self.style.ERROR(f"Grid run {run_id} not found"))
-                return
-        else:
-            grid_run = (
-                UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS)
-                .order_by("-generated_at")
-                .first()
-            )
-
-        if not grid_run:
-            self.stderr.write(self.style.ERROR("No successful grid run found"))
+        blended = fetch_grid_ensemble(
+            points,
+            start_date=today.strftime("%Y-%m-%d"),
+            end_date=today.strftime("%Y-%m-%d"),
+        )
+        if not blended:
+            self.stderr.write("No grid data returned — aborting")
             return
 
-        # Get all unique timestamps
-        timestamps = list(
-            UKRiskGridPoint.objects.filter(run=grid_run)
-            .values_list("timestamp", flat=True)
-            .distinct()
-            .order_by("timestamp")
-        )
-
-        if not timestamps:
-            self.stderr.write(self.style.ERROR(f"No grid points for run {grid_run.pk}"))
+        risk_by_point = compute_grid_risk(blended, WORK_START, WORK_END)
+        if not risk_by_point:
+            self.stderr.write("No risk scores computed — aborting")
             return
 
-        total_images = len(timestamps) * len(variables)
-        self.stdout.write(
-            f"Pre-rendering contour cache for grid run {grid_run.pk}\n"
-            f"  Forecast date: {grid_run.forecast_date}\n"
-            f"  Timestamps: {len(timestamps)}\n"
-            f"  Variables: {', '.join(variables)}\n"
-            f"  Total images: {total_images}\n"
-            f"  Resolution: {resolution}, DPI: {dpi}"
+        lats = np.array([p[0] for p in risk_by_point])
+        lons = np.array([p[1] for p in risk_by_point])
+        risks = np.array([risk_by_point[p] for p in risk_by_point])
+
+        peak_idx = int(np.argmax(risks))
+
+        image_b64 = self._render_contour(lats, lons, risks)
+
+        UKRiskMap.objects.filter(forecast_date=today).delete()
+        UKRiskMap.objects.create(
+            forecast_date=today,
+            image_data=image_b64,
+            peak_risk=float(risks[peak_idx]),
+            peak_location_lat=float(lats[peak_idx]),
+            peak_location_lon=float(lons[peak_idx]),
+            grid_points=len(risk_by_point),
         )
 
-        # Delete existing cache for this run
-        deleted_count, _ = CachedContourImage.objects.filter(run=grid_run).delete()
-        if deleted_count:
-            self.stdout.write(f"  Cleared {deleted_count} existing cached images")
+        self.stdout.write(self.style.SUCCESS(
+            f"UK risk map cached for {today}: {len(risk_by_point)} points, "
+            f"peak risk {risks[peak_idx]:.1f}% at ({lats[peak_idx]:.2f}, {lons[peak_idx]:.2f})"
+        ))
 
-        start_time = time.time()
-        total_rendered = 0
-        total_failed = 0
+    def _render_contour(self, lats, lons, risks) -> str:
+        fig, ax = plt.subplots(figsize=(7, 9))
+        contour = ax.tricontourf(
+            lons, lats, risks,
+            levels=np.linspace(0, 100, 11),
+            cmap="RdYlGn_r",
+        )
+        ax.set_xlabel("Longitude")
+        ax.set_ylabel("Latitude")
+        ax.set_title("OrcaMet UK Risk Map — Peak Work-Hour Risk (%)")
+        fig.colorbar(contour, ax=ax, label="Risk %")
+        ax.set_aspect(1.6)  # rough correction for longitude compression at UK latitudes
 
-        # Process ONE VARIABLE AT A TIME, flushing to DB after each
-        for var_idx, var_name in enumerate(variables):
-            field_name = VARIABLE_FIELD_MAP.get(var_name, "risk")
-
-            self.stdout.write(
-                f"\n  [{var_idx + 1}/{len(variables)}] Rendering {var_name}..."
-            )
-
-            var_records = []
-            var_rendered = 0
-            var_failed = 0
-
-            for ts_idx, timestamp in enumerate(timestamps):
-                try:
-                    # Query grid points for this timestamp
-                    points = UKRiskGridPoint.objects.filter(
-                        run=grid_run, timestamp=timestamp,
-                    )
-
-                    lats = np.array(list(points.values_list("latitude", flat=True)))
-                    lons = np.array(list(points.values_list("longitude", flat=True)))
-                    values = np.array(list(points.values_list(field_name, flat=True)))
-
-                    if len(lats) < 4:
-                        var_failed += 1
-                        continue
-
-                    # Render the contour image
-                    png_bytes = render_contour_to_bytes(
-                        lats, lons, values,
-                        variable=var_name,
-                        resolution=resolution,
-                        dpi=dpi,
-                    )
-
-                    var_records.append(CachedContourImage(
-                        run=grid_run,
-                        timestamp=timestamp,
-                        variable=var_name,
-                        image_data=png_bytes,
-                    ))
-                    var_rendered += 1
-
-                    # Force garbage collection every render to combat
-                    # matplotlib memory leaks
-                    gc.collect()
-
-                    # Progress every 6 hours
-                    if (ts_idx + 1) % 6 == 0 or ts_idx == len(timestamps) - 1:
-                        elapsed = time.time() - start_time
-                        done = total_rendered + total_failed + var_rendered + var_failed
-                        rate = done / elapsed if elapsed > 0 else 0
-                        remaining = total_images - done
-                        eta = remaining / rate if rate > 0 else 0
-                        self.stdout.write(
-                            f"    {ts_idx + 1}/{len(timestamps)} hours — "
-                            f"{var_rendered} OK, {var_failed} failed, "
-                            f"ETA {eta:.0f}s"
-                        )
-
-                except Exception as e:
-                    logger.error(f"Failed to render {var_name} @ {timestamp}: {e}")
-                    self.stdout.write(self.style.WARNING(
-                        f"    ⚠ {var_name} @ hour {ts_idx}: {e}"
-                    ))
-                    var_failed += 1
-                    gc.collect()
-
-            # FLUSH this variable's images to DB immediately
-            if var_records:
-                try:
-                    batch_size = 20
-                    for i in range(0, len(var_records), batch_size):
-                        batch = var_records[i:i + batch_size]
-                        CachedContourImage.objects.bulk_create(batch)
-
-                    total_size_kb = sum(len(r.image_data) for r in var_records) / 1024
-                    self.stdout.write(self.style.SUCCESS(
-                        f"    ✓ {var_name}: {var_rendered} images stored "
-                        f"({total_size_kb:.0f} KB total)"
-                    ))
-                except Exception as e:
-                    logger.error(f"DB insert failed for {var_name}: {e}")
-                    self.stdout.write(self.style.ERROR(
-                        f"    ✗ DB insert failed for {var_name}: {e}"
-                    ))
-                    var_failed += var_rendered
-                    var_rendered = 0
-
-            total_rendered += var_rendered
-            total_failed += var_failed
-
-            # Free all references and force GC before next variable
-            del var_records
-            gc.collect()
-
-        # Final summary
-        elapsed = time.time() - start_time
-        if total_rendered > 0:
-            self.stdout.write(self.style.SUCCESS(
-                f"\n  ✓ Contour cache complete: {total_rendered} images "
-                f"({total_failed} failed) in {elapsed:.0f}s"
-            ))
-        else:
-            self.stderr.write(self.style.ERROR("  ✗ No images were rendered"))
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode("ascii")

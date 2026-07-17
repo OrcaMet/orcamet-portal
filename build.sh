@@ -5,8 +5,7 @@
 set -o errexit
 
 echo "=== Installing dependencies ==="
-pip install --no-cache-dir numpy pandas
-pip install --no-cache-dir -r requirements.txt
+pip install -r requirements.txt
 
 echo "=== Collecting static files ==="
 python manage.py collectstatic --no-input

@@ -30,6 +30,7 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.3"
       # Auth0 — set these manually in the Render dashboard
+      # after creating your Auth0 application
       # - key: AUTH0_DOMAIN
       #   value: your-tenant.uk.auth0.com
       # - key: AUTH0_CLIENT_ID
@@ -39,17 +40,16 @@ services:
       # - key: OPENMETEO_API_KEY
       #   value: your-api-key
 
-  # ============================================================
-  # CRON JOBS — Automated Forecast Generation
-  # ============================================================
-  # Runs at 06:00 and 14:00 UTC daily, ensuring there is always
-  # a fresh forecast available in the portal.
-  # ============================================================
-
+  # Per-site forecast run, every 6 hours. This matches the
+  # orcamet-portal_site_forecasts cron job already running in the Render
+  # dashboard — kept here so the blueprint stays in sync with what's
+  # actually deployed. Cron jobs require a paid plan — Render's free
+  # plan does not support the cron service type.
   - type: cron
-    name: orcamet-forecast-morning
+    plan: starter
+    name: orcamet-portal_site_forecasts
     runtime: python
-    schedule: "0 6 * * *"
+    schedule: "0 */6 * * *"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python manage.py run_forecasts"
     envVars:
@@ -61,15 +61,22 @@ services:
         generateValue: true
       - key: PYTHON_VERSION
         value: "3.12.3"
+      # OPENMETEO_API_KEY — set manually in the Render dashboard,
+      # never commit a real key here
       # - key: OPENMETEO_API_KEY
       #   value: your-api-key
 
+  # UK-wide risk contour map, refreshed every 6 hours. This matches the
+  # orcamet-portal_risk_grid cron job already running in the Render
+  # dashboard — kept here so the blueprint stays in sync with what's
+  # actually deployed.
   - type: cron
-    name: orcamet-forecast-afternoon
+    plan: starter
+    name: orcamet-portal_risk_grid
     runtime: python
-    schedule: "0 14 * * *"
+    schedule: "0 */6 * * *"
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python manage.py run_forecasts"
+    startCommand: "python manage.py generate_contour_cache"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -79,22 +86,7 @@ services:
         generateValue: true
       - key: PYTHON_VERSION
         value: "3.12.3"
-      # - key: OPENMETEO_API_KEY
-      #   value: your-api-key
-      - type: cron
-    name: orcamet-risk-grid
-    runtime: python
-    schedule: "30 5 * * *"
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python manage.py risk_grid && python manage.py generate_contour_cache"
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: orcamet-db
-          property: connectionString
-      - key: SECRET_KEY
-        generateValue: true
-      - key: PYTHON_VERSION
-        value: "3.12.3"
+      # OPENMETEO_API_KEY — set manually in the Render dashboard,
+      # never commit a real key here
       # - key: OPENMETEO_API_KEY
       #   value: your-api-key

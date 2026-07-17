@@ -135,7 +135,7 @@ In your Render web service, go to **Environment → Add Environment Variable**:
 | `AUTH0_DOMAIN` | `orcamet.uk.auth0.com` *(your Auth0 domain)* |
 | `AUTH0_CLIENT_ID` | *(from Auth0 dashboard)* |
 | `AUTH0_CLIENT_SECRET` | *(from Auth0 dashboard)* |
-| `OPENMETEO_API_KEY` | auto-generated ` |
+| `OPENMETEO_API_KEY` | *(get your own free key from open-meteo.com/en/pricing — never commit a real key to git)* |
 | `WEB_CONCURRENCY` | `4` |
 
 ### Step 7: Create Your Superadmin Account

@@ -4,15 +4,6 @@ OrcaMet Forecast Engine — Core
 Extracted from Point_Job_Certainty.py and adapted for Django.
 Fetches multi-model ensemble forecasts from Open-Meteo, blends them
 with geographic-aware weighting, and computes hourly risk scores.
-
-Models:
-    UKV           – Met Office 2 km, UK mainland (always available for UK sites)
-    ICON-D2       – DWD 2.2 km, Central Europe (SE England / East Anglia only)
-    AROME France  – Météo-France 2.5 km, covers southern UK + Channel
-    HARMONIE Europe – KNMI 5.5 km, full UK + Ireland + Northern Europe
-    ARPEGE Europe – Météo-France 11 km, Europe-wide synoptic backbone
-    ECMWF HRES    – 9 km global, best medium-range
-    ICON-EU       – DWD 7 km, Europe-wide
 """
 
 import logging
@@ -24,244 +15,84 @@ import numpy as np
 import pandas as pd
 import requests
 from django.conf import settings
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# OPEN-METEO API HOST
+# HTTP SESSION WITH RETRY/BACKOFF
 # ============================================================
-#
-# Use the COMMERCIAL endpoint when an API key is configured —
-# the free `api.open-meteo.com` host ignores paid keys and will
-# rate-limit (429) under the free-tier quota regardless.
-#
-# https://open-meteo.com/en/docs#api-documentation
-#
-OPENMETEO_HOST = "https://customer-api.open-meteo.com"
+# Open-Meteo occasionally returns 429/5xx or drops a connection under
+# load. Retry transient failures instead of failing the whole run.
+
+def _build_session() -> requests.Session:
+    retry = Retry(
+        total=3,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+_session = _build_session()
 
 # ============================================================
 # MULTI-MODEL CONFIGURATION
 # ============================================================
 
 MODELS_CONFIG = {
-    # --- High-resolution regional models (domain-limited) ---
     "ukv": {
         "name": "Met Office UKV",
-        "url": f"{OPENMETEO_HOST}/v1/forecast",
+        "url": "https://api.open-meteo.com/v1/forecast",
         "params": {"models": "ukmo_uk_deterministic_2km"},
         "resolution_km": 2.0,
-        "forecast_days": 5,
-    },
-    "icon_d2": {
-        "name": "DWD ICON-D2",
-        "url": f"{OPENMETEO_HOST}/v1/dwd-icon",
-        "params": {"models": "icon_d2"},
-        "resolution_km": 2.2,
-        "forecast_days": 2,
-    },
-    "arome_france": {
-        "name": "Météo-France AROME",
-        "url": f"{OPENMETEO_HOST}/v1/meteofrance",
-        "params": {"models": "arome_france"},
-        "resolution_km": 2.5,
-        "forecast_days": 2,
-    },
-    "harmonie_europe": {
-        "name": "KNMI HARMONIE AROME Europe",
-        "url": f"{OPENMETEO_HOST}/v1/knmi",
-        "params": {"models": "knmi_harmonie_arome_europe"},
-        "resolution_km": 5.5,
-        "forecast_days": 2,
-    },
-    # --- Synoptic / Europe-wide models (always available for UK) ---
-    "arpege_europe": {
-        "name": "Météo-France ARPEGE Europe",
-        "url": f"{OPENMETEO_HOST}/v1/meteofrance",
-        "params": {"models": "arpege_europe"},
-        "resolution_km": 11.0,
-        "forecast_days": 4,
     },
     "ecmwf": {
-        "name": "ECMWF IFS",
-        "url": f"{OPENMETEO_HOST}/v1/ecmwf",
+        "name": "ECMWF HRES",
+        "url": "https://api.open-meteo.com/v1/ecmwf",
         "params": {},
         "resolution_km": 9.0,
-        "forecast_days": 10,
     },
     "icon_eu": {
         "name": "DWD ICON-EU",
-        "url": f"{OPENMETEO_HOST}/v1/dwd-icon",
-        "params": {"models": "icon_eu"},
+        "url": "https://api.open-meteo.com/v1/dwd-icon",
+        "params": {},
         "resolution_km": 7.0,
-        "forecast_days": 5,
+    },
+    "arpege": {
+        "name": "Météo-France ARPEGE",
+        "url": "https://api.open-meteo.com/v1/meteofrance",
+        "params": {"models": "arpege_world"},
+        "resolution_km": 10.0,
     },
 }
-
-# ============================================================
-# GEOGRAPHIC DOMAIN DEFINITIONS
-# ============================================================
-#
-# Approximate bounding boxes for domain-limited models.
-# These are conservative estimates — better to miss a marginal
-# grid cell than to request data and get interpolated junk from
-# outside the native domain.
-#
-# UKV: always eligible if the site is roughly within the UK
-# ICON-D2: Central Europe — clips off Scotland, Wales, SW England
-# AROME France: Southern UK, Channel, France, Iberia
-# HARMONIE Europe: Full UK + Ireland + Scandinavia + Central Europe
-
-DOMAIN_BOUNDS = {
-    "ukv": {
-        "lat_min": 49.5, "lat_max": 61.0,
-        "lon_min": -12.0, "lon_max": 3.0,
-    },
-    "icon_d2": {
-        # Conservative: only SE/E England and the near-continent
-        "lat_min": 49.0, "lat_max": 55.5,
-        "lon_min": -3.0, "lon_max": 16.0,
-    },
-    "arome_france": {
-        # Covers southern England, Channel, France, NE Spain
-        "lat_min": 38.0, "lat_max": 55.5,
-        "lon_min": -8.0, "lon_max": 12.0,
-    },
-    "harmonie_europe": {
-        # Very wide: Iceland to Central Europe, full UK coverage
-        "lat_min": 45.0, "lat_max": 72.0,
-        "lon_min": -30.0, "lon_max": 30.0,
-    },
-    # These three have Europe-wide or global coverage — always eligible
-    "arpege_europe": None,  # Always available
-    "ecmwf": None,          # Always available
-    "icon_eu": None,         # Always available
-}
-
-
-def is_in_domain(model_name: str, lat: float, lon: float) -> bool:
-    """Check whether a lat/lon point falls within a model's native domain."""
-    bounds = DOMAIN_BOUNDS.get(model_name)
-    if bounds is None:
-        return True  # Global / Europe-wide models are always eligible
-    return (
-        bounds["lat_min"] <= lat <= bounds["lat_max"] and
-        bounds["lon_min"] <= lon <= bounds["lon_max"]
-    )
-
-
-def get_eligible_models(lat: float, lon: float) -> list:
-    """Return list of model names whose domains cover the given location."""
-    return [m for m in MODELS_CONFIG if is_in_domain(m, lat, lon)]
 
 
 # ============================================================
 # GEOGRAPHIC-AWARE MODEL WEIGHTING
 # ============================================================
 
-# Base weighting tiers for UK regions.
-# These represent the *ideal* weights when all models are available.
-# If a model is not in domain, it is excluded and weights are re-normalised.
-
-WEIGHT_PROFILES = {
-    "scotland_highland": {
-        # UKV dominates — knows the orography. HARMONIE adds value.
-        # ICON-D2 and AROME almost certainly out of domain here.
-        "ukv": 0.40, "harmonie_europe": 0.20, "ecmwf": 0.20,
-        "icon_eu": 0.10, "arpege_europe": 0.10,
-        "icon_d2": 0.00, "arome_france": 0.00,
-    },
-    "northern_england": {
-        # UKV still strong. HARMONIE useful. AROME may clip in.
-        "ukv": 0.30, "harmonie_europe": 0.20, "ecmwf": 0.20,
-        "icon_eu": 0.10, "arpege_europe": 0.05,
-        "arome_france": 0.10, "icon_d2": 0.05,
-    },
-    "south_east_england": {
-        # All models available — spread the load, favouring high-res
-        "ukv": 0.20, "icon_d2": 0.20, "arome_france": 0.15,
-        "harmonie_europe": 0.15, "ecmwf": 0.15,
-        "icon_eu": 0.10, "arpege_europe": 0.05,
-    },
-    "south_west_england": {
-        # Atlantic influence — ARPEGE good for synoptic tracking.
-        # ICON-D2 likely out of domain. AROME covers this.
-        "ukv": 0.25, "arome_france": 0.20, "harmonie_europe": 0.15,
-        "ecmwf": 0.15, "arpege_europe": 0.10, "icon_eu": 0.10,
-        "icon_d2": 0.05,
-    },
-    "wales_irish_sea": {
-        # Atlantic-exposed, UKV strong for Welsh valleys.
-        # ICON-D2 out of domain. AROME marginal.
-        "ukv": 0.30, "harmonie_europe": 0.20, "ecmwf": 0.15,
-        "arpege_europe": 0.15, "icon_eu": 0.10,
-        "arome_france": 0.10, "icon_d2": 0.00,
-    },
-    "coastal_channel": {
-        # English Channel — AROME excels here, ICON-D2 available
-        "arome_france": 0.25, "ukv": 0.20, "icon_d2": 0.15,
-        "harmonie_europe": 0.15, "ecmwf": 0.10,
-        "arpege_europe": 0.10, "icon_eu": 0.05,
-    },
-    "default_uk": {
-        # Midlands / generic UK — balanced approach
-        "ukv": 0.25, "harmonie_europe": 0.20, "ecmwf": 0.15,
-        "arome_france": 0.10, "icon_d2": 0.10,
-        "icon_eu": 0.10, "arpege_europe": 0.10,
-    },
-}
-
-
-def _classify_region(lat: float, lon: float, exposure: str) -> str:
-    """Classify a UK lat/lon into a weighting region."""
-    # Channel coast special case
-    if exposure == "coastal" and lat < 51.5 and lon > -5.0:
-        return "coastal_channel"
-
-    # Scotland and Highlands
-    if lat > 56.0 or exposure == "highland":
-        return "scotland_highland"
-
-    # Northern England
-    if lat > 53.5:
-        return "northern_england"
-
-    # Wales and Irish Sea coast
-    if lon < -3.0:
-        return "wales_irish_sea"
-
-    # South East England
-    if lon > -1.5 and lat < 53.5:
-        return "south_east_england"
-
-    # South West England
-    if lon <= -1.5 and lat < 53.5:
-        return "south_west_england"
-
-    return "default_uk"
-
-
 def get_model_weights(lat: float, lon: float, exposure: str = "urban") -> dict:
-    """
-    Determine model weights based on geographic location, site exposure,
-    and model domain eligibility.
+    """Determine model weights based on geographic location and site exposure."""
 
-    Returns dict of {model_name: weight} for eligible models only.
-    Weights are normalised to sum to 1.0.
-    """
-    region = _classify_region(lat, lon, exposure)
-    profile = WEIGHT_PROFILES.get(region, WEIGHT_PROFILES["default_uk"]).copy()
+    scotland = lat > 56.0
+    northern_england = 53.5 < lat <= 56.0
+    coastal = exposure == "coastal"
+    highland = exposure == "highland"
 
-    # Remove models that are outside their native domain for this location
-    eligible = get_eligible_models(lat, lon)
-    weights = {m: w for m, w in profile.items() if m in eligible and w > 0}
-
-    if not weights:
-        # Fallback: at least use the always-available models
-        weights = {"ecmwf": 0.40, "icon_eu": 0.30, "arpege_europe": 0.30}
-
-    # Re-normalise so weights sum to 1.0
-    total = sum(weights.values())
-    return {m: w / total for m, w in weights.items()}
+    if highland or scotland:
+        return {"ukv": 0.60, "ecmwf": 0.25, "icon_eu": 0.10, "arpege": 0.05}
+    elif coastal:
+        return {"ukv": 0.45, "ecmwf": 0.25, "arpege": 0.20, "icon_eu": 0.10}
+    elif northern_england:
+        return {"ukv": 0.40, "ecmwf": 0.30, "icon_eu": 0.20, "arpege": 0.10}
+    else:
+        return {"ukv": 0.35, "ecmwf": 0.35, "icon_eu": 0.20, "arpege": 0.10}
 
 
 # ============================================================
@@ -314,7 +145,7 @@ def calculate_hourly_risk(wind: float, gust: float, precip: float, temp: float,
     )
 
     if np.isnan(r):
-        return 0.0
+        return np.nan
 
     prob = sigmoid(6.0 * (r - 0.45))
     return float(np.clip(prob * 100, 0.0, 100.0))
@@ -357,7 +188,7 @@ def fetch_single_model(model_name: str, lat: float, lon: float,
     if api_key:
         params["apikey"] = api_key
 
-    resp = requests.get(config["url"], params=params, timeout=30)
+    resp = _session.get(config["url"], params=params, timeout=30)
     resp.raise_for_status()
     j = resp.json()
 
@@ -380,19 +211,10 @@ def fetch_ensemble(lat: float, lon: float, exposure: str,
     """
     Fetch multi-model ensemble for a location and blend into a single DataFrame.
 
-    Automatically determines which models are eligible based on geographic
-    domain coverage, assigns region-aware weights, and blends into a single
-    forecast with uncertainty spread metrics.
-
     Returns DataFrame with columns: time, wind_speed, wind_gusts, precipitation,
-    temperature, and _spread columns for each, plus n_models and models_used.
+    temperature, and _spread columns for each, plus n_models.
     """
     weights = get_model_weights(lat, lon, exposure)
-
-    logger.info(
-        f"Ensemble for ({lat:.4f}, {lon:.4f}) [{exposure}]: "
-        f"{len(weights)} models — {', '.join(f'{m}={w:.0%}' for m, w in weights.items())}"
-    )
 
     ensemble_data = {}
     successful_models = []
@@ -404,7 +226,7 @@ def fetch_ensemble(lat: float, lon: float, exposure: str,
             data = fetch_single_model(model_name, lat, lon, start_date, end_date)
             ensemble_data[model_name] = {"weight": weight, "data": data}
             successful_models.append(model_name)
-            logger.debug(f"  ✓ {MODELS_CONFIG[model_name]['name']} (weight={weight:.0%})")
+            logger.debug(f"  ✓ {MODELS_CONFIG[model_name]['name']}")
         except Exception as e:
             logger.warning(f"  ✗ {MODELS_CONFIG[model_name]['name']}: {e}")
 
@@ -413,11 +235,6 @@ def fetch_ensemble(lat: float, lon: float, exposure: str,
 
     if not ensemble_data:
         raise ValueError(f"All models failed for ({lat:.4f}, {lon:.4f})")
-
-    if len(ensemble_data) < len(weights):
-        logger.info(
-            f"  {len(ensemble_data)}/{len(weights)} models succeeded — re-normalising weights"
-        )
 
     # Re-normalise weights to account for failed models
     total_weight = sum(d["weight"] for d in ensemble_data.values())
@@ -450,23 +267,10 @@ def _create_weighted_ensemble(ensemble_data: dict, model_names: list) -> pd.Data
             values = data.get(var)
             if values is None:
                 values = [np.nan] * n_times
-            # Convert to float array — None elements become NaN automatically
-            values = np.array(values, dtype=object)
-            values = np.where(values == None, np.nan, values).astype(float)  # noqa: E711
-
-            # Handle length mismatch: some high-res models have shorter
-            # forecast horizons than global models. Pad with NaN.
-            if len(values) < n_times:
-                padded = np.full(n_times, np.nan)
-                padded[:len(values)] = values
-                values = padded
-            elif len(values) > n_times:
-                values = values[:n_times]
-
+            values = np.array(values)
+            values = np.where(values is None, np.nan, values).astype(float)
             if len(values) == n_times:
-                # Only add weighted contribution where we have valid data
-                valid_mask = ~np.isnan(values)
-                ensemble_vars[var] += np.where(valid_mask, weight * values, 0.0)
+                ensemble_vars[var] += weight * values
                 raw_values[var].append(values)
 
     spread = {}
@@ -482,7 +286,5 @@ def _create_weighted_ensemble(ensemble_data: dict, model_names: list) -> pd.Data
         **spread,
         "n_models": len(model_names),
     })
-    # Replace any remaining NaN values with 0.0 to prevent PostgreSQL errors
-    df = df.fillna(0.0)
     df.attrs["models_used"] = model_names
     return df
