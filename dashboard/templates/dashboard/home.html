@@ -22,11 +22,13 @@
             <div class="stat-label">Active Sites</div>
         </div>
         <div class="stat-card">
-            <div class="stat-number">—</div>
-            <div class="stat-label">Latest Forecast</div>
+            <div class="stat-number">
+                {% if latest_forecast_at %}{{ latest_forecast_at|date:"d M, H:i" }}{% else %}—{% endif %}
+            </div>
+            <div class="stat-label">Latest Forecast (UTC)</div>
         </div>
         <div class="stat-card">
-            <div class="stat-number">—</div>
+            <div class="stat-number">{{ alert_count }}</div>
             <div class="stat-label">Alerts</div>
         </div>
     </div>
@@ -61,7 +63,23 @@
                         {% endif %}
                     </td>
                     <td>
-                        <span class="badge badge-pending">Awaiting forecast</span>
+                        {% with run=site.latest_run %}
+                        {% if run.status == "success" %}
+                            {% if run.recommendation == "GO" %}
+                                <span class="badge badge-active">GO — {{ run.peak_risk|floatformat:0 }}%</span>
+                            {% elif run.recommendation == "CAUTION" %}
+                                <span class="badge badge-caution">CAUTION — {{ run.peak_risk|floatformat:0 }}%</span>
+                            {% elif run.recommendation == "CANCEL" %}
+                                <span class="badge badge-cancel">CANCEL — {{ run.peak_risk|floatformat:0 }}%</span>
+                            {% else %}
+                                <span class="badge badge-muted">UNKNOWN</span>
+                            {% endif %}
+                        {% elif run.status == "failed" %}
+                            <span class="badge badge-muted">Forecast error</span>
+                        {% else %}
+                            <span class="badge badge-pending">Awaiting forecast</span>
+                        {% endif %}
+                        {% endwith %}
                     </td>
                 </tr>
                 {% endfor %}
@@ -81,9 +99,24 @@
 
     <div class="section">
         <h2>UK Risk Map</h2>
-        <div class="empty-state">
-            <p>Risk map generation will be available in Phase 2.</p>
+        {% if uk_risk_map %}
+        <div class="risk-map">
+            <img
+                src="data:image/png;base64,{{ uk_risk_map.image_data }}"
+                alt="UK risk map — {{ uk_risk_map.forecast_date }}"
+                class="risk-map-image"
+            >
+            <p class="risk-map-caption">
+                {{ uk_risk_map.forecast_date }} — peak risk {{ uk_risk_map.peak_risk|floatformat:0 }}%
+                · generated {{ uk_risk_map.generated_at|date:"d M, H:i" }} UTC
+                · {{ uk_risk_map.grid_points }} grid points
+            </p>
         </div>
+        {% else %}
+        <div class="empty-state">
+            <p>UK risk map has not been generated yet.</p>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

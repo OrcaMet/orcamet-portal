@@ -78,20 +78,34 @@ class Command(BaseCommand):
         ))
 
     def _render_contour(self, lats, lons, risks) -> str:
+        # Matches the portal's ocean-blue theme (orcamet_portal/static/orcamet_portal/css/portal.css)
+        bg = "#1e293b"     # --surface
+        fg = "#f1f5f9"     # --text-primary
+        grid = "#334155"   # --border
+
         fig, ax = plt.subplots(figsize=(7, 9))
+        fig.patch.set_facecolor(bg)
+        ax.set_facecolor(bg)
+
         contour = ax.tricontourf(
             lons, lats, risks,
             levels=np.linspace(0, 100, 11),
             cmap="RdYlGn_r",
         )
-        ax.set_xlabel("Longitude")
-        ax.set_ylabel("Latitude")
-        ax.set_title("OrcaMet UK Risk Map — Peak Work-Hour Risk (%)")
-        fig.colorbar(contour, ax=ax, label="Risk %")
+        ax.set_xlabel("Longitude", color=fg)
+        ax.set_ylabel("Latitude", color=fg)
+        ax.set_title("OrcaMet UK Risk Map — Peak Work-Hour Risk (%)", color=fg)
+        ax.tick_params(colors=fg)
+        for spine in ax.spines.values():
+            spine.set_color(grid)
         ax.set_aspect(1.6)  # rough correction for longitude compression at UK latitudes
 
+        cbar = fig.colorbar(contour, ax=ax, label="Risk %")
+        cbar.ax.yaxis.label.set_color(fg)
+        cbar.ax.tick_params(colors=fg)
+
         buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
+        fig.savefig(buf, format="png", dpi=110, bbox_inches="tight", facecolor=bg)
         plt.close(fig)
         buf.seek(0)
         return base64.b64encode(buf.read()).decode("ascii")
