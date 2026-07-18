@@ -3,9 +3,9 @@ OrcaMet Portal — Dashboard Views
 
 The main views a logged-in user sees.
 """
-
 from django.contrib.auth.decorators import login_required
-from django.shortcuts import render
+from django.http import Http404
+from django.shortcuts import render, get_object_or_404
 
 from forecasts.models import ForecastRun, UKRiskMap
 from sites.models import Site
@@ -57,3 +57,36 @@ def home(request):
     }
 
     return render(request, "dashboard/home.html", context)
+
+@login_required(login_url="/login/")
+def site_detail(request, site_id):
+    """
+    Detail view for a single site.
+
+    Shows the latest forecast run, hourly breakdown, active thresholds,
+    and recent forecast history for one site.
+    """
+    user = request.user
+
+    if user.is_superadmin:
+        site = get_object_or_404(Site, pk=site_id, is_active=True)
+    elif user.client:
+        site = get_object_or_404(Site, pk=site_id, client=user.client, is_active=True)
+    else:
+        raise Http404("Site not found")
+
+    latest_run = ForecastRun.objects.filter(site=site).order_by("-generated_at").first()
+    hourly = latest_run.hourly_data.all() if latest_run else []
+    thresholds = site.thresholds.filter(is_active=True).first()
+    past_runs = ForecastRun.objects.filter(site=site).order_by("-generated_at")[1:8]
+
+    context = {
+        "user": user,
+        "site": site,
+        "run": latest_run,
+        "hourly": hourly,
+        "thresholds": thresholds,
+        "past_runs": past_runs,
+    }
+
+    return render(request, "dashboard/site_detail.html", context)
