@@ -51,7 +51,7 @@
             <tbody>
                 {% for site in sites %}
                 <tr>
-                    <td><strong>{{ site.name }}</strong></td>
+    <td><strong><a href="{% url 'dashboard:site_detail' site.id %}">{{ site.name }}</a></strong></td>
                     {% if user.is_superadmin %}<td>{{ site.client.name }}</td>{% endif %}
                     <td>{{ site.postcode }}</td>
                     <td>{{ site.get_exposure_display }}</td>
@@ -100,6 +100,7 @@
     <div class="section">
         <h2>UK Risk Map</h2>
         {% if uk_risk_map %}
+<a href="{% url 'forecasts:risk_map_detail' %}" class="risk-map-link">
         <div class="risk-map">
             <img
                 src="data:image/png;base64,{{ uk_risk_map.image_data }}"
@@ -112,6 +113,7 @@
                 · {{ uk_risk_map.grid_points }} grid points
             </p>
         </div>
+</a>
         {% else %}
         <div class="empty-state">
             <p>UK risk map has not been generated yet.</p>
