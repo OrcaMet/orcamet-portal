@@ -117,3 +117,69 @@ class UKRiskMap(models.Model):
 
     def __str__(self):
         return f"UK Risk Map — {self.forecast_date}"
+
+
+class UKRiskGridRun(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        FAILED = "failed", "Failed"
+
+    forecast_date = models.DateField()
+    generated_at = models.DateTimeField(default=timezone.now)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    lat_min = models.FloatField(default=49.9)
+    lat_max = models.FloatField(default=58.7)
+    lon_min = models.FloatField(default=-7.6)
+    lon_max = models.FloatField(default=1.8)
+    resolution = models.FloatField(default=0.5, help_text="Grid spacing in degrees")
+    grid_points = models.IntegerField(default=0)
+    num_hours = models.IntegerField(default=0)
+    models_used = models.JSONField(default=list)
+    error_message = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-generated_at"]
+
+    def __str__(self):
+        return f"UK Risk Grid Run — {self.forecast_date} — {self.get_status_display()}"
+
+class UKRiskGridPoint(models.Model):
+    run = models.ForeignKey(UKRiskGridRun, on_delete=models.CASCADE, related_name="points")
+    latitude = models.FloatField()
+    longitude = models.FloatField()
+    timestamp = models.DateTimeField()
+    wind_speed = models.FloatField(default=0.0)
+    wind_gusts = models.FloatField(default=0.0)
+    precipitation = models.FloatField(default=0.0)
+    temperature = models.FloatField(default=0.0)
+    risk = models.FloatField(default=0.0, help_text="Risk score 0-100%")
+
+    class Meta:
+        ordering = ["timestamp", "latitude", "longitude"]
+        indexes = [models.Index(fields=["run", "timestamp"], name="forecasts_u_run_id_3b3b76_idx")]
+
+    def __str__(self):
+        return f"({self.latitude:.2f}, {self.longitude:.2f}) — {self.timestamp:%Y-%m-%d %H:%M} — {self.risk:.0f}%"
+
+class CachedContourImage(models.Model):
+    class Variable(models.TextChoices):
+        RISK = "risk", "Risk"
+        WIND = "wind", "Wind Speed"
+        GUST = "gust", "Wind Gusts"
+        PRECIP = "precip", "Precipitation"
+        TEMP = "temp", "Temperature"
+
+    run = models.ForeignKey(UKRiskGridRun, on_delete=models.CASCADE, related_name="cached_images")
+    timestamp = models.DateTimeField()
+    variable = models.CharField(max_length=10, choices=Variable.choices)
+    image_data = models.BinaryField(help_text="PNG image bytes (pre-rendered contour map)")
+
+    class Meta:
+        ordering = ["variable", "timestamp"]
+        indexes = [models.Index(fields=["run", "variable", "timestamp"], name="forecasts_c_run_id_37aedb_idx")]
+        unique_together = [("run", "timestamp", "variable")]
+
+    def __str__(self):
+        return f"{self.get_variable_display()} contour — {self.timestamp:%Y-%m-%d %H:%M}"
