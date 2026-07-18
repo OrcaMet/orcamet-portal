@@ -40,6 +40,9 @@ def _build_session() -> requests.Session:
 
 
 _session = _build_session()
+# Base host for the Open-Meteo API (used for logging/diagnostics by the
+# grid management command).
+OPENMETEO_HOST = "https://api.open-meteo.com"
 
 # ============================================================
 # MULTI-MODEL CONFIGURATION
@@ -64,13 +67,35 @@ MODELS_CONFIG = {
         "params": {},
         "resolution_km": 7.0,
     },
-    "arpege": {
+    "arpege_europe": {
         "name": "Météo-France ARPEGE",
         "url": "https://api.open-meteo.com/v1/meteofrance",
-        "params": {"models": "arpege_world"},
+        "params": {"models": "arpege_europe"},
         "resolution_km": 10.0,
     },
 }
+
+# ============================================================
+# MODEL GEOGRAPHIC DOMAINS
+# ============================================================
+# Approximate coverage boxes for each model. UKV is a UK/Ireland-only
+# limited-area model; the others are pan-European/global and comfortably
+# cover the UK risk grid. Used by risk_grid.py to skip models that don't
+# cover a given grid point.
+
+DOMAIN_BOUNDS = {
+    "ukv": {"lat_min": 49.0, "lat_max": 61.0, "lon_min": -11.0, "lon_max": 2.0},
+    "ecmwf": None,  # global model — always in domain
+    "icon_eu": {"lat_min": 29.5, "lat_max": 70.5, "lon_min": -23.5, "lon_max": 45.0},
+    "arpege_europe": {"lat_min": 20.0, "lat_max": 72.0, "lon_min": -32.0, "lon_max": 42.0},
+}
+
+def is_in_domain(model_name: str, lat: float, lon: float) -> bool:
+    """Return True if (lat, lon) falls inside the model's coverage domain."""
+    bounds = DOMAIN_BOUNDS.get(model_name)
+    if bounds is None:
+        return True
+    return bounds["lat_min"] <= lat <= bounds["lat_max"] and bounds["lon_min"] <= lon <= bounds["lon_max"]
 
 
 # ============================================================
@@ -86,13 +111,13 @@ def get_model_weights(lat: float, lon: float, exposure: str = "urban") -> dict:
     highland = exposure == "highland"
 
     if highland or scotland:
-        return {"ukv": 0.60, "ecmwf": 0.25, "icon_eu": 0.10, "arpege": 0.05}
+        return {"ukv": 0.60, "ecmwf": 0.25, "icon_eu": 0.10, "arpege_europe": 0.05}
     elif coastal:
-        return {"ukv": 0.45, "ecmwf": 0.25, "arpege": 0.20, "icon_eu": 0.10}
+        return {"ukv": 0.45, "ecmwf": 0.25, "arpege_europe": 0.20, "icon_eu": 0.10}
     elif northern_england:
-        return {"ukv": 0.40, "ecmwf": 0.30, "icon_eu": 0.20, "arpege": 0.10}
+        return {"ukv": 0.40, "ecmwf": 0.30, "icon_eu": 0.20, "arpege_europe": 0.10}
     else:
-        return {"ukv": 0.35, "ecmwf": 0.35, "icon_eu": 0.20, "arpege": 0.10}
+        return {"ukv": 0.35, "ecmwf": 0.35, "icon_eu": 0.20, "arpege_europe": 0.10}
 
 
 # ============================================================
