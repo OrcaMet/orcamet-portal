@@ -240,7 +240,6 @@
     var imageCache = {};
     var gridRunKey = '';
     var hasServerCache = false;
-    gridRunKey = d.run_key || d.generated_at || '';
     var contourAvailable = true;
 
 function contourUrl(timestamp, varName) {
@@ -427,6 +426,7 @@ function contourUrl(timestamp, varName) {
                 if (d.available) {
                     gridTimestamps = d.timestamps || [];
                     hasServerCache = d.has_cache || false;
+                    gridRunKey = d.run_key || d.generated_at || '';
                     var models = d.models_used || [];
                     var statusParts = [d.grid_points + ' pts'];
                     if (models.length) statusParts.push(models.length + ' models');
