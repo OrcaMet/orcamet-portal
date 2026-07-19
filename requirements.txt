@@ -14,7 +14,8 @@ requests~=2.31
 # Static files
 whitenoise[brotli]
 
-# Forecast engine (lightweight — no GIS deps needed for site forecasts)
+# Forecast engine
 numpy
 pandas
 matplotlib
+scipy

@@ -11,68 +11,65 @@ class Migration(migrations.Migration):
         ('forecasts', '0001_initial'),
     ]
 
-    # Tables already exist in production (created outside migrations).
-    # State-only: records these models in migration history without SQL.
+    # Real CreateModel operations (not state-only). This migration is
+    # already recorded as applied against production, where these tables
+    # were originally created out-of-band — Django won't re-run it there.
+    # On any fresh database, this now actually creates the tables instead
+    # of silently leaving them missing.
     operations = [
-        migrations.SeparateDatabaseAndState(
-            state_operations=[
-
-            migrations.CreateModel(
-                name='UKRiskGridRun',
-                fields=[
-                    ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                    ('forecast_date', models.DateField()),
-                    ('generated_at', models.DateTimeField(default=django.utils.timezone.now)),
-                    ('status', models.CharField(choices=[('pending', 'Pending'), ('running', 'Running'), ('success', 'Success'), ('failed', 'Failed')], default='pending', max_length=10)),
-                    ('lat_min', models.FloatField(default=49.9)),
-                    ('lat_max', models.FloatField(default=58.7)),
-                    ('lon_min', models.FloatField(default=-7.6)),
-                    ('lon_max', models.FloatField(default=1.8)),
-                    ('resolution', models.FloatField(default=0.5, help_text='Grid spacing in degrees')),
-                    ('grid_points', models.IntegerField(default=0)),
-                    ('num_hours', models.IntegerField(default=0)),
-                    ('models_used', models.JSONField(default=list)),
-                    ('error_message', models.TextField(blank=True)),
-                ],
-                options={
-                    'ordering': ['-generated_at'],
-                },
-            ),
-            migrations.CreateModel(
-                name='UKRiskGridPoint',
-                fields=[
-                    ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                    ('latitude', models.FloatField()),
-                    ('longitude', models.FloatField()),
-                    ('timestamp', models.DateTimeField()),
-                    ('wind_speed', models.FloatField(default=0.0)),
-                    ('wind_gusts', models.FloatField(default=0.0)),
-                    ('precipitation', models.FloatField(default=0.0)),
-                    ('temperature', models.FloatField(default=0.0)),
-                    ('risk', models.FloatField(default=0.0, help_text='Risk score 0-100%')),
-                    ('run', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='points', to='forecasts.ukriskgridrun')),
-                ],
-                options={
-                    'ordering': ['timestamp', 'latitude', 'longitude'],
-                    'indexes': [models.Index(fields=['run', 'timestamp'], name='forecasts_u_run_id_3b3b76_idx')],
-                },
-            ),
-            migrations.CreateModel(
-                name='CachedContourImage',
-                fields=[
-                    ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                    ('timestamp', models.DateTimeField()),
-                    ('variable', models.CharField(choices=[('risk', 'Risk'), ('wind', 'Wind Speed'), ('gust', 'Wind Gusts'), ('precip', 'Precipitation'), ('temp', 'Temperature')], max_length=10)),
-                    ('image_data', models.BinaryField(help_text='PNG image bytes (pre-rendered contour map)')),
-                    ('run', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='cached_images', to='forecasts.ukriskgridrun')),
-                ],
-                options={
-                    'ordering': ['variable', 'timestamp'],
-                    'indexes': [models.Index(fields=['run', 'variable', 'timestamp'], name='forecasts_c_run_id_37aedb_idx')],
-                    'unique_together': {('run', 'timestamp', 'variable')},
-                },
-            ),
+        migrations.CreateModel(
+            name='UKRiskGridRun',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('forecast_date', models.DateField()),
+                ('generated_at', models.DateTimeField(default=django.utils.timezone.now)),
+                ('status', models.CharField(choices=[('pending', 'Pending'), ('running', 'Running'), ('success', 'Success'), ('failed', 'Failed')], default='pending', max_length=10)),
+                ('lat_min', models.FloatField(default=49.9)),
+                ('lat_max', models.FloatField(default=58.7)),
+                ('lon_min', models.FloatField(default=-7.6)),
+                ('lon_max', models.FloatField(default=1.8)),
+                ('resolution', models.FloatField(default=0.5, help_text='Grid spacing in degrees')),
+                ('grid_points', models.IntegerField(default=0)),
+                ('num_hours', models.IntegerField(default=0)),
+                ('models_used', models.JSONField(default=list)),
+                ('error_message', models.TextField(blank=True)),
             ],
-            database_operations=[],
+            options={
+                'ordering': ['-generated_at'],
+            },
+        ),
+        migrations.CreateModel(
+            name='UKRiskGridPoint',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('latitude', models.FloatField()),
+                ('longitude', models.FloatField()),
+                ('timestamp', models.DateTimeField()),
+                ('wind_speed', models.FloatField(default=0.0)),
+                ('wind_gusts', models.FloatField(default=0.0)),
+                ('precipitation', models.FloatField(default=0.0)),
+                ('temperature', models.FloatField(default=0.0)),
+                ('risk', models.FloatField(default=0.0, help_text='Risk score 0-100%')),
+                ('run', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='points', to='forecasts.ukriskgridrun')),
+            ],
+            options={
+                'ordering': ['timestamp', 'latitude', 'longitude'],
+                'indexes': [models.Index(fields=['run', 'timestamp'], name='forecasts_u_run_id_3b3b76_idx')],
+            },
+        ),
+        migrations.CreateModel(
+            name='CachedContourImage',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('timestamp', models.DateTimeField()),
+                ('variable', models.CharField(choices=[('risk', 'Risk'), ('wind', 'Wind Speed'), ('gust', 'Wind Gusts'), ('precip', 'Precipitation'), ('temp', 'Temperature')], max_length=10)),
+                ('image_data', models.BinaryField(help_text='PNG image bytes (pre-rendered contour map)')),
+                ('run', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='cached_images', to='forecasts.ukriskgridrun')),
+            ],
+            options={
+                'ordering': ['variable', 'timestamp'],
+                'indexes': [models.Index(fields=['run', 'variable', 'timestamp'], name='forecasts_c_run_id_37aedb_idx')],
+                'unique_together': {('run', 'timestamp', 'variable')},
+            },
         ),
     ]
