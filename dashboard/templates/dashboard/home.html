@@ -100,7 +100,7 @@
     <div class="section">
         <h2>UK Risk Map</h2>
         {% if uk_risk_map %}
-<a href="{% url 'forecasts:risk_map_detail' %}" class="risk-map-link">
+        <a href="{% url 'dashboard:weather_map' %}" class="risk-map-link">
         <div class="risk-map">
             <img
                 src="data:image/png;base64,{{ uk_risk_map.image_data }}"
