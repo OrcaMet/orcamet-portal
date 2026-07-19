@@ -13,7 +13,7 @@ from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from forecasts.models import ForecastRun, HourlyForecast, UKRiskMap, UKRiskGridRun, UKRiskGridPoint, CachedContourImage
+from forecasts.models import ForecastRun, HourlyForecast, UKRiskGridRun, UKRiskGridPoint, CachedContourImage
 from sites.models import Site
 
 
@@ -43,7 +43,7 @@ def home(request):
     generated_times = [s.latest_run.generated_at for s in sites_list if s.latest_run]
     alert_count = sum(1 for s in sites_list if s.latest_run and s.latest_run.status == ForecastRun.Status.SUCCESS and s.latest_run.recommendation in ("CAUTION", "CANCEL"))
 
-    context = {"user": user, "sites": sites_list, "site_count": len(sites_list), "latest_forecast_at": max(generated_times) if generated_times else None, "alert_count": alert_count, "uk_risk_map": UKRiskMap.objects.order_by("-generated_at").first()}
+    context = {"user": user, "sites": sites_list, "site_count": len(sites_list), "latest_forecast_at": max(generated_times) if generated_times else None, "alert_count": alert_count}
 
     return render(request, "dashboard/home.html", context)
 

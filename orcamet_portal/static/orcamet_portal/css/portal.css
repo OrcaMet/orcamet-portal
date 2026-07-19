@@ -326,6 +326,17 @@ a:hover { color: var(--teal); text-decoration: underline; }
     color: var(--text-secondary);
 }
 
+.map-cta {
+    display: block;
+    text-decoration: none;
+}
+
+.map-cta:hover .empty-state {
+    background: var(--surface-light);
+    border-color: var(--teal);
+    color: var(--text-primary);
+}
+
 /* --- Error Pages --- */
 .error-page {
     text-align: center;
