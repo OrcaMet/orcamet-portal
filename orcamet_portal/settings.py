@@ -4,6 +4,8 @@ OrcaMet Portal — Django Settings
 
 import os
 from pathlib import Path
+
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv, find_dotenv
 import dj_database_url
 
@@ -11,6 +13,20 @@ import dj_database_url
 ENV_FILE = find_dotenv()
 if ENV_FILE:
     load_dotenv(ENV_FILE)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read a boolean-ish environment variable."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_list(name: str) -> list:
+    """Read a comma-separated environment variable into a list."""
+    raw = os.environ.get(name, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 # ============================================================
 # PATHS
@@ -23,18 +39,34 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY
 # ============================================================
 
-SECRET_KEY = os.environ.get(
-    "SECRET_KEY",
-    "django-insecure-dev-only-change-me-in-production"
-)
+# Treat anything running on Render as production. DJANGO_PRODUCTION lets
+# other hosts (staging, containers) opt in explicitly, so a deployment that
+# is not on Render no longer silently runs with DEBUG enabled.
+IS_PRODUCTION = bool(os.environ.get("RENDER")) or _env_flag("DJANGO_PRODUCTION")
 
-# Debug is True locally, False on Render
-DEBUG = "RENDER" not in os.environ
+# Debug defaults to on for local development, off in production. It can be
+# overridden explicitly, but never defaults to on for a production host.
+DEBUG = _env_flag("DJANGO_DEBUG", default=not IS_PRODUCTION)
+
+# SECRET_KEY must be supplied in production. Falling back to a hardcoded
+# value there would let anyone forge sessions and signed data, so fail loudly
+# instead. Render supplies this via `generateValue: true` in render.yaml.
+SECRET_KEY = os.environ.get("SECRET_KEY", "")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "django-insecure-dev-only-change-me-in-production"
+    else:
+        raise ImproperlyConfigured(
+            "SECRET_KEY environment variable is required when DEBUG is False."
+        )
 
 ALLOWED_HOSTS = []
 RENDER_EXTERNAL_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
 if RENDER_EXTERNAL_HOSTNAME:
     ALLOWED_HOSTS.append(RENDER_EXTERNAL_HOSTNAME)
+
+# Additional hostnames (e.g. a custom domain such as portal.orcamet.co.uk).
+ALLOWED_HOSTS += _env_list("DJANGO_ALLOWED_HOSTS")
 
 # Allow localhost in development
 if DEBUG:
@@ -44,6 +76,31 @@ if DEBUG:
 CSRF_TRUSTED_ORIGINS = []
 if RENDER_EXTERNAL_HOSTNAME:
     CSRF_TRUSTED_ORIGINS.append(f"https://{RENDER_EXTERNAL_HOSTNAME}")
+for _host in _env_list("DJANGO_ALLOWED_HOSTS"):
+    CSRF_TRUSTED_ORIGINS.append(f"https://{_host}")
+
+
+# ============================================================
+# TRANSPORT SECURITY (production only)
+# ============================================================
+# Render terminates TLS at its proxy and forwards X-Forwarded-Proto, so
+# Django needs the proxy header to know a request arrived over HTTPS.
+# Without it, SECURE_SSL_REDIRECT would cause a redirect loop.
+
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = "DENY"
+    # Start with a short HSTS window. Raise to 31536000 (and consider
+    # preload) once HTTPS is confirmed working on every hostname served —
+    # HSTS is cached by browsers and hard to walk back.
+    SECURE_HSTS_SECONDS = 3600
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_HSTS_PRELOAD = False
 
 
 # ============================================================

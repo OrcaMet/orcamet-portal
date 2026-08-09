@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 
 import numpy as np
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone as dj_timezone
 
 from forecasts.models import ForecastRun, HourlyForecast
@@ -24,6 +25,16 @@ from .core import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _finite_or_zero(value) -> float:
+    """Coerce a spread value to a finite float (0.0 when unknown)."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if np.isfinite(f) else 0.0
+
 
 # Work window defaults (can be overridden in settings)
 WORK_START = getattr(settings, "FORECAST_WORK_START_HOUR", 7)
@@ -37,7 +48,8 @@ def run_forecast_for_site(site: Site) -> list:
 
     Returns a list of ForecastRun objects (one per day).
     """
-    if not site.latitude or not site.longitude:
+    # `is None` rather than falsiness — longitude 0.0 is a valid UK location.
+    if site.latitude is None or site.longitude is None:
         logger.error(f"Site {site.name} has no coordinates — skipping")
         return []
 
@@ -119,51 +131,90 @@ def run_forecast_for_site(site: Site) -> list:
         if work_hours.empty:
             continue
 
-        peak_risk = float(work_hours["hourly_risk"].max())
-        peak_wind = float(work_hours["wind_speed"].max())
-        peak_gust = float(work_hours["wind_gusts"].max())
-        peak_precip = float(work_hours["precipitation"].max())
-        min_temp = float(work_hours["temperature"].min())
+        # Summary stats ignore hours the ensemble could not produce a value
+        # for. NaN here would be stored in the database and then serialised
+        # as a bare `NaN` token, which is not valid JSON and breaks every
+        # consumer of the map endpoints.
+        valid_hours = work_hours[work_hours["hourly_risk"].notna()]
+        if valid_hours.empty:
+            logger.warning(
+                f"  ✗ {forecast_date}: no usable ensemble hours in the work "
+                f"window — skipping this day"
+            )
+            continue
+
+        peak_risk = float(valid_hours["hourly_risk"].max())
+        peak_wind = float(valid_hours["wind_speed"].max())
+        peak_gust = float(valid_hours["wind_gusts"].max())
+        peak_precip = float(valid_hours["precipitation"].max())
+        min_temp = float(valid_hours["temperature"].min())
         recommendation = get_recommendation(peak_risk)
 
-        # Delete any existing runs for this site+date (replace with fresh)
-        ForecastRun.objects.filter(
-            site=site,
-            forecast_date=forecast_date,
-        ).delete()
-
-        run = ForecastRun.objects.create(
-            site=site,
-            forecast_date=forecast_date,
-            status=ForecastRun.Status.SUCCESS,
-            peak_risk=peak_risk,
-            recommendation=recommendation,
-            peak_wind=peak_wind,
-            peak_gust=peak_gust,
-            peak_precip=peak_precip,
-            min_temp=min_temp,
-            models_used=[m for m in models_used],
-            thresholds_snapshot=thresholds,
-        )
-
-        # Store all hourly data (full 24h, not just work hours)
-        hourly_records = []
+        # Build the hourly rows first so the whole day can be written in one
+        # atomic block below.
+        hourly_rows = []
+        skipped_hours = 0
         for _, row in day_data.iterrows():
-            hourly_records.append(HourlyForecast(
-                run=run,
-                timestamp=row["time"],
-                wind_speed=float(row["wind_speed"]),
-                wind_gusts=float(row["wind_gusts"]),
-                precipitation=float(row["precipitation"]),
-                temperature=float(row["temperature"]),
-                wind_spread=float(row.get("wind_speed_spread", 0)),
-                gust_spread=float(row.get("wind_gusts_spread", 0)),
-                precip_spread=float(row.get("precipitation_spread", 0)),
-                temp_spread=float(row.get("temperature_spread", 0)),
-                hourly_risk=float(row["hourly_risk"]),
-            ))
+            values = (
+                row["wind_speed"], row["wind_gusts"],
+                row["precipitation"], row["temperature"],
+                row["hourly_risk"],
+            )
+            # Never persist NaN: the field is non-null, Postgres accepts NaN
+            # for a double, and it then serialises to invalid JSON.
+            if any(v is None or not np.isfinite(v) for v in values):
+                skipped_hours += 1
+                continue
+            hourly_rows.append(row)
 
-        HourlyForecast.objects.bulk_create(hourly_records)
+        if skipped_hours:
+            logger.warning(
+                f"  {forecast_date}: skipped {skipped_hours} hour(s) with "
+                f"incomplete ensemble data"
+            )
+
+        # Replace the existing runs for this site+date atomically, so a
+        # failure part-way cannot leave the site with the old forecast
+        # deleted and no new one in its place.
+        with transaction.atomic():
+            ForecastRun.objects.filter(
+                site=site,
+                forecast_date=forecast_date,
+            ).delete()
+
+            run = ForecastRun.objects.create(
+                site=site,
+                forecast_date=forecast_date,
+                status=ForecastRun.Status.SUCCESS,
+                peak_risk=peak_risk,
+                recommendation=recommendation,
+                peak_wind=peak_wind,
+                peak_gust=peak_gust,
+                peak_precip=peak_precip,
+                min_temp=min_temp,
+                models_used=[m for m in models_used],
+                thresholds_snapshot=thresholds,
+            )
+
+            # Store all hourly data (full 24h, not just work hours)
+            hourly_records = [
+                HourlyForecast(
+                    run=run,
+                    timestamp=row["time"],
+                    wind_speed=float(row["wind_speed"]),
+                    wind_gusts=float(row["wind_gusts"]),
+                    precipitation=float(row["precipitation"]),
+                    temperature=float(row["temperature"]),
+                    wind_spread=_finite_or_zero(row.get("wind_speed_spread", 0)),
+                    gust_spread=_finite_or_zero(row.get("wind_gusts_spread", 0)),
+                    precip_spread=_finite_or_zero(row.get("precipitation_spread", 0)),
+                    temp_spread=_finite_or_zero(row.get("temperature_spread", 0)),
+                    hourly_risk=float(row["hourly_risk"]),
+                )
+                for row in hourly_rows
+            ]
+
+            HourlyForecast.objects.bulk_create(hourly_records)
 
         logger.info(
             f"  ✓ {forecast_date}: peak risk {peak_risk:.1f}% "

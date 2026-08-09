@@ -70,8 +70,9 @@ def callback_view(request):
     auth0_id = str(userinfo.get("sub", ""))
     email = str(userinfo.get("email", ""))
     name = str(userinfo.get("name", ""))
+    email_verified = userinfo.get("email_verified") is True
 
-    logger.info(f"Auth0 callback received: email={email}, sub={auth0_id}")
+    logger.info(f"Auth0 callback received: sub={auth0_id}, verified={email_verified}")
 
     # Store only simple strings in session
     request.session["auth0_user"] = {
@@ -85,14 +86,23 @@ def callback_view(request):
     if auth0_id:
         user = User.objects.filter(auth0_id=auth0_id).first()
 
-    if user is None and email:
+    # Fall back to matching on email — but only if Auth0 asserts the address
+    # has been verified. Without that check, anyone who can register at the
+    # identity provider with an existing user's address would be linked
+    # straight into that account, including a superadmin one.
+    if user is None and email and email_verified:
         user = User.objects.filter(email__iexact=email).first()
         if user and not user.auth0_id:
             user.auth0_id = auth0_id
             user.save(update_fields=["auth0_id"])
 
+    if user is None and email and not email_verified:
+        logger.warning(
+            f"Refusing email-based account link for unverified address (sub={auth0_id})"
+        )
+
     if user is None:
-        logger.warning(f"No Django user found for email={email}")
+        logger.warning(f"No Django user found for sub={auth0_id}")
         return render(request, "accounts/no_access.html", {
             "email": email,
             "name": name,

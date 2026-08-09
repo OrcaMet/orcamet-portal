@@ -5,6 +5,7 @@ The main views a logged-in user sees.
 """
 
 import json
+import math
 
 from django.contrib.auth.decorators import login_required
 from django.db.models import Max
@@ -26,6 +27,39 @@ def _visible_sites(user):
     return Site.objects.none()
 
 
+def _num(value):
+    """
+    Return a JSON-safe number, or None for anything non-finite.
+
+    json.dumps emits bare NaN/Infinity tokens, which are not valid JSON. One
+    non-finite value used to make an entire map response unparseable in the
+    browser, which silently emptied the map.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _latest_runs_by_site(sites, success_only=True):
+    """
+    Return {site_id: most recent ForecastRun} for the given sites.
+
+    Uses a single query. Callers previously looped over sites issuing one
+    query each, so a client with N sites cost N queries per page load.
+    """
+    runs = ForecastRun.objects.filter(site__in=sites)
+    if success_only:
+        runs = runs.filter(status=ForecastRun.Status.SUCCESS)
+
+    latest = {}
+    # Newest run for each site comes first, so the first one wins.
+    for run in runs.order_by("site_id", "-generated_at"):
+        latest.setdefault(run.site_id, run)
+    return latest
+
+
 @login_required(login_url="/login/")
 def home(request):
     """
@@ -37,8 +71,10 @@ def home(request):
     user = request.user
     sites_list = list(_visible_sites(user))
 
+    # Latest run of any status, matching the previous behaviour.
+    latest_runs = _latest_runs_by_site(sites_list, success_only=False)
     for site in sites_list:
-        site.latest_run = ForecastRun.objects.filter(site=site).order_by("-generated_at").first()
+        site.latest_run = latest_runs.get(site.id)
 
     generated_times = [s.latest_run.generated_at for s in sites_list if s.latest_run]
     alert_count = sum(1 for s in sites_list if s.latest_run and s.latest_run.status == ForecastRun.Status.SUCCESS and s.latest_run.recommendation in ("CAUTION", "CANCEL"))
@@ -93,11 +129,14 @@ def weather_map(request):
     user = request.user
     sites_qs = _visible_sites(user)
 
-    recommendations = []
-    for site in sites_qs:
-        run = ForecastRun.objects.filter(site=site, status=ForecastRun.Status.SUCCESS).order_by("-generated_at").first()
-        if run and run.recommendation:
-            recommendations.append(run.recommendation)
+    sites_list = list(sites_qs)
+    latest_runs = _latest_runs_by_site(sites_list)
+
+    recommendations = [
+        run.recommendation
+        for run in (latest_runs.get(site.id) for site in sites_list)
+        if run and run.recommendation
+    ]
 
     latest_grid_run = UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS).order_by("-generated_at").first()
 
@@ -119,16 +158,39 @@ def map_sites_json(request):
     user = request.user
     sites_qs = _visible_sites(user)
 
+    sites_list = list(sites_qs)
+    latest_runs = _latest_runs_by_site(sites_list)
+
     features = []
-    for site in sites_qs:
-        if not site.coords:
+    for site in sites_list:
+        if site.coords is None:
             continue
 
-        run = ForecastRun.objects.filter(site=site, status=ForecastRun.Status.SUCCESS).order_by("-generated_at").first()
+        run = latest_runs.get(site.id)
 
-        props = {"id": site.id, "name": site.name, "client": site.client.name, "postcode": site.postcode, "exposure": site.get_exposure_display(), "has_forecast": bool(run), "recommendation": run.recommendation if run else None, "peak_risk": run.peak_risk if run else None, "peak_wind": run.peak_wind if run else None, "peak_gust": run.peak_gust if run else None, "peak_precip": run.peak_precip if run else None, "min_temp": run.min_temp if run else None, "forecast_date": run.forecast_date.isoformat() if run else None}
-        features.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [site.longitude, site.latitude]}, "properties": props})
-
+        props = {
+            "id": site.id,
+            "name": site.name,
+            "client": site.client.name,
+            "postcode": site.postcode,
+            "exposure": site.get_exposure_display(),
+            "has_forecast": bool(run),
+            "recommendation": run.recommendation if run else None,
+            "peak_risk": _num(run.peak_risk) if run else None,
+            "peak_wind": _num(run.peak_wind) if run else None,
+            "peak_gust": _num(run.peak_gust) if run else None,
+            "peak_precip": _num(run.peak_precip) if run else None,
+            "min_temp": _num(run.min_temp) if run else None,
+            "forecast_date": run.forecast_date.isoformat() if run else None,
+        }
+        features.append({
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [site.longitude, site.latitude],
+            },
+            "properties": props,
+        })
 
     return JsonResponse({"type": "FeatureCollection", "features": features})
 
@@ -139,18 +201,30 @@ def map_sites_hourly_json(request):
     user = request.user
     sites_qs = _visible_sites(user)
 
+    sites_list = [s for s in sites_qs if s.coords is not None]
+    latest_runs = _latest_runs_by_site(sites_list)
+
+    runs_by_id = {}
+    for site in sites_list:
+        run = latest_runs.get(site.id)
+        if run:
+            runs_by_id[run.id] = site
+
+    # One query for every run's hourly data instead of one per site.
+    hours_by_run = {run_id: [] for run_id in runs_by_id}
+    if runs_by_id:
+        for hour in HourlyForecast.objects.filter(
+            run_id__in=runs_by_id
+        ).order_by("timestamp"):
+            hours_by_run[hour.run_id].append(hour)
+
     site_hours = []
     timestamps_set = set()
 
-    for site in sites_qs:
-        if not site.coords:
+    for run_id, site in runs_by_id.items():
+        hours = hours_by_run.get(run_id, [])[:48]
+        if not hours:
             continue
-
-        run = ForecastRun.objects.filter(site=site, status=ForecastRun.Status.SUCCESS).order_by("-generated_at").first()
-        if not run:
-            continue
-
-        hours = list(run.hourly_data.all().order_by("timestamp")[:48])
         site_hours.append((site, hours))
         for h in hours:
             timestamps_set.add(h.timestamp)
@@ -162,7 +236,23 @@ def map_sites_hourly_json(request):
     for site, hours in site_hours:
         for h in hours:
             ts_str = h.timestamp.isoformat()
-            frames[ts_str]["features"].append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [site.longitude, site.latitude]}, "properties": {"id": site.id, "name": site.name, "client": site.client.name, "postcode": site.postcode, "wind_speed": h.wind_speed, "wind_gusts": h.wind_gusts, "precipitation": h.precipitation, "temperature": h.temperature}})
+            frames[ts_str]["features"].append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [site.longitude, site.latitude],
+                },
+                "properties": {
+                    "id": site.id,
+                    "name": site.name,
+                    "client": site.client.name,
+                    "postcode": site.postcode,
+                    "wind_speed": _num(h.wind_speed),
+                    "wind_gusts": _num(h.wind_gusts),
+                    "precipitation": _num(h.precipitation),
+                    "temperature": _num(h.temperature),
+                },
+            })
 
     return JsonResponse({"timestamps": ts_strs, "frames": frames})
 
@@ -172,8 +262,27 @@ def map_contour_image(request):
     """Serve a single cached contour PNG for a variable/timestamp."""
     var_name = request.GET.get("var", "risk")
     timestamp = request.GET.get("timestamp")
+    run_key = request.GET.get("run")
 
-    run = UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS).order_by("-generated_at").first()
+    if var_name not in CachedContourImage.Variable.values:
+        raise Http404("Unknown contour variable")
+
+    # The client sends the run key it built its timeline from. Honour it, so
+    # that a grid run completing mid-session cannot cause frames from the new
+    # run to be served against the old run's timestamps.
+    # The client falls back to a timestamp string when no run key is known,
+    # so only treat a well-formed integer as a primary key.
+    run = None
+    if run_key and run_key.isdigit():
+        run = UKRiskGridRun.objects.filter(
+            pk=int(run_key), status=UKRiskGridRun.Status.SUCCESS
+        ).first()
+
+    if run is None:
+        run = UKRiskGridRun.objects.filter(
+            status=UKRiskGridRun.Status.SUCCESS
+        ).order_by("-generated_at").first()
+
     if not run:
         raise Http404("No grid run available")
 

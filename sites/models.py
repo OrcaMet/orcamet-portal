@@ -83,13 +83,17 @@ class Site(models.Model):
 
     @property
     def coords(self):
-        if self.latitude and self.longitude:
+        # Compare against None rather than testing truthiness: longitude 0.0
+        # is a valid UK coordinate (the Greenwich meridian runs through
+        # London, Cambridge and East Anglia) and would otherwise be treated
+        # as "no coordinates", silently hiding the site.
+        if self.latitude is not None and self.longitude is not None:
             return (self.latitude, self.longitude)
         return None
 
     def save(self, *args, **kwargs):
         """Auto-geocode postcode on save if lat/lon not set."""
-        if self.postcode and not (self.latitude and self.longitude):
+        if self.postcode and (self.latitude is None or self.longitude is None):
             lat, lon = geocode_postcode(self.postcode)
             if lat is not None:
                 self.latitude = lat
