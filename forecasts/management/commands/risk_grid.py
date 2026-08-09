@@ -16,8 +16,8 @@ Usage:
     python manage.py risk_grid --days 2            # 2-day forecast
     python manage.py risk_grid --batch-size 30     # Smaller batches
 
-After completion, run generate_contour_cache to pre-render map images:
-    python manage.py generate_contour_cache
+This command also pre-renders the contour overlays the interactive map
+serves from /dashboard/map/contour.png (see --contour-vars).
 """
 
 import gc
@@ -26,17 +26,18 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import numpy as np
-import requests
+import requests  # for requests.exceptions.HTTPError in the retry path
 from django.core.management.base import BaseCommand, CommandError
 from django.conf import settings
 
-from forecasts.models import UKRiskGridRun, UKRiskGridPoint
+from forecasts.models import UKRiskGridRun, UKRiskGridPoint, CachedContourImage
 from forecasts.engine.core import (
     calculate_hourly_risk,
     get_model_weights,
     is_in_domain,
     MODELS_CONFIG,
     OPENMETEO_HOST,
+    _session,
 )
 
 logger = logging.getLogger(__name__)
@@ -96,17 +97,25 @@ def _parse_timestamp(t_str):
         return datetime.strptime(t_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
 
-def _safe_float(value, default=0.0):
-    """Convert a value to float, returning default for None/NaN/Inf."""
+def _safe_float(value):
+    """
+    Convert a value to float, returning NaN for None/NaN/Inf/garbage.
+
+    This deliberately does NOT substitute a benign default. Earlier versions
+    returned 0.0 for wind/gust/precipitation and 10.0 for temperature, so a
+    gap in the API feed was blended in as "calm, dry and mild" — the lowest
+    risk values possible. Missing data now propagates as NaN and is excluded
+    from the ensemble entirely.
+    """
     if value is None:
-        return default
+        return np.nan
     try:
         f = float(value)
-        if np.isnan(f) or np.isinf(f):
-            return default
-        return f
     except (ValueError, TypeError):
-        return default
+        return np.nan
+    if np.isnan(f) or np.isinf(f):
+        return np.nan
+    return f
 
 
 def fetch_batch(model_name, lats, lons, start_date, end_date):
@@ -134,7 +143,10 @@ def fetch_batch(model_name, lats, lons, start_date, end_date):
     if api_key:
         params["apikey"] = api_key
 
-    resp = requests.get(config["url"], params=params, timeout=60)
+    # Use the shared session so grid fetches get the same retry/backoff on
+    # 429/5xx that single-site fetches do. This is the heaviest API workload
+    # in the app and was previously the only one without it.
+    resp = _session.get(config["url"], params=params, timeout=60)
     resp.raise_for_status()
     data = resp.json()
 
@@ -180,15 +192,45 @@ class Command(BaseCommand):
             "--batch-size", type=int, default=50,
             help="Locations per API call (default: 50, max ~100)",
         )
+        parser.add_argument(
+            "--contour-vars", type=str, default="risk",
+            help=(
+                "Comma-separated variables to pre-render contour overlays for "
+                "(default: risk). Use 'none' to skip rendering. Each variable "
+                "adds one PNG per forecast hour to the database."
+            ),
+        )
+        parser.add_argument(
+            "--retention-days", type=int, default=2,
+            help="Delete grid runs with a forecast_date older than this (default: 2)",
+        )
 
     def handle(self, *args, **options):
         resolution = options["resolution"]
         num_days = options["days"]
         batch_size = options["batch_size"]
+        retention_days = options["retention_days"]
+
+        raw_vars = (options["contour_vars"] or "").strip().lower()
+        if raw_vars in ("", "none"):
+            contour_vars = []
+        else:
+            contour_vars = [v.strip() for v in raw_vars.split(",") if v.strip()]
+
+        valid_vars = set(CachedContourImage.Variable.values)
+        unknown = [v for v in contour_vars if v not in valid_vars]
+        if unknown:
+            raise CommandError(
+                f"Unknown --contour-vars value(s): {', '.join(unknown)}. "
+                f"Valid options: {', '.join(sorted(valid_vars))}"
+            )
+
         grid_run = None
 
         try:
-            grid_run = self._run_pipeline(resolution, num_days, batch_size)
+            grid_run = self._run_pipeline(
+                resolution, num_days, batch_size, contour_vars, retention_days
+            )
         except CommandError:
             # CommandError already sets grid_run status if applicable
             raise
@@ -202,7 +244,105 @@ class Command(BaseCommand):
                 grid_run.save()
             raise CommandError(f"Unexpected error: {e}")
 
-    def _run_pipeline(self, resolution, num_days, batch_size):
+    def _render_contours(self, grid_run, contour_vars):
+        """
+        Pre-render contour overlay PNGs for the completed grid run.
+
+        The map serves these from /dashboard/map/contour.png. Rendering here
+        (in the cron job) rather than in the web request keeps matplotlib and
+        scipy out of the gunicorn workers, which are memory-constrained.
+        """
+        # Imported lazily so the fetch phase does not pay the matplotlib
+        # import cost, and so a missing optional dependency cannot stop a
+        # grid run that has already succeeded.
+        from forecasts.engine.map_interpolation import render_contour_to_bytes
+
+        field_for_var = {
+            "risk": "risk",
+            "wind": "wind_speed",
+            "gust": "wind_gusts",
+            "precip": "precipitation",
+            "temp": "temperature",
+        }
+
+        timestamps = list(
+            UKRiskGridPoint.objects
+            .filter(run=grid_run)
+            .values_list("timestamp", flat=True)
+            .distinct()
+            .order_by("timestamp")
+        )
+
+        self.stdout.write(
+            f"\n  Rendering contours for {', '.join(contour_vars)} "
+            f"across {len(timestamps)} hour(s)..."
+        )
+
+        rendered = 0
+        failed = 0
+
+        for ts in timestamps:
+            rows = list(
+                UKRiskGridPoint.objects
+                .filter(run=grid_run, timestamp=ts)
+                .values_list(
+                    "latitude", "longitude", "risk",
+                    "wind_speed", "wind_gusts", "precipitation", "temperature",
+                )
+            )
+            if len(rows) < 4:
+                # interpolate_risk_surface needs at least 4 points
+                continue
+
+            arr = np.array(rows, dtype=float)
+            lats = arr[:, 0]
+            lons = arr[:, 1]
+            columns = {
+                "risk": arr[:, 2],
+                "wind_speed": arr[:, 3],
+                "wind_gusts": arr[:, 4],
+                "precipitation": arr[:, 5],
+                "temperature": arr[:, 6],
+            }
+
+            images = []
+            for var in contour_vars:
+                values = columns[field_for_var[var]]
+                try:
+                    png = render_contour_to_bytes(lats, lons, values, variable=var)
+                except Exception as e:
+                    failed += 1
+                    logger.warning(f"Contour render failed ({var} @ {ts}): {e}")
+                    continue
+
+                images.append(CachedContourImage(
+                    run=grid_run,
+                    timestamp=ts,
+                    variable=var,
+                    image_data=png,
+                ))
+
+            if images:
+                # ignore_conflicts guards the (run, timestamp, variable)
+                # unique constraint if this command is re-run for a run.
+                CachedContourImage.objects.bulk_create(
+                    images, ignore_conflicts=True
+                )
+                rendered += len(images)
+
+            gc.collect()
+
+        if failed:
+            self.stdout.write(self.style.WARNING(
+                f"  Contours: {rendered} rendered, {failed} failed"
+            ))
+        else:
+            self.stdout.write(self.style.SUCCESS(
+                f"  Contours: {rendered} image(s) cached"
+            ))
+
+    def _run_pipeline(self, resolution, num_days, batch_size,
+                      contour_vars, retention_days):
         """
         Main pipeline. Returns the UKRiskGridRun on success.
         Raises CommandError on any failure.
@@ -346,9 +486,17 @@ class Command(BaseCommand):
         acc_gust = np.zeros((total_points, num_hours), dtype=np.float32)
         acc_prcp = np.zeros((total_points, num_hours), dtype=np.float32)
         acc_temp = np.zeros((total_points, num_hours), dtype=np.float32)
-        acc_wt = np.zeros((total_points, num_hours), dtype=np.float32)
 
-        mem_mb = total_points * num_hours * 5 * 4 / 1024 / 1024
+        # One weight accumulator per variable. A model can return a valid
+        # wind series but a null temperature for the same hour; a single
+        # shared weight total would then divide the temperature sum by weight
+        # that was never applied to it, biasing that variable low.
+        wt_wind = np.zeros((total_points, num_hours), dtype=np.float32)
+        wt_gust = np.zeros((total_points, num_hours), dtype=np.float32)
+        wt_prcp = np.zeros((total_points, num_hours), dtype=np.float32)
+        wt_temp = np.zeros((total_points, num_hours), dtype=np.float32)
+
+        mem_mb = total_points * num_hours * 8 * 4 / 1024 / 1024
         self.stdout.write(
             f"  Accumulators: {total_points}×{num_hours} = {mem_mb:.1f} MB"
         )
@@ -439,13 +587,24 @@ class Command(BaseCommand):
                             wv = _safe_float(ws[t] if t < len(ws) else None)
                             gv = _safe_float(gs[t] if t < len(gs) else None)
                             pv = _safe_float(ps[t] if t < len(ps) else None)
-                            tv = _safe_float(ts[t] if t < len(ts) else None, 10.0)
+                            tv = _safe_float(ts[t] if t < len(ts) else None)
 
-                            acc_wind[idx, t] += w * wv
-                            acc_gust[idx, t] += w * gv
-                            acc_prcp[idx, t] += w * pv
-                            acc_temp[idx, t] += w * tv
-                            acc_wt[idx, t] += w
+                            # Only accumulate values that are actually
+                            # present, and only add the weight where it was
+                            # applied. Missing readings contribute nothing
+                            # rather than being invented as benign.
+                            if not np.isnan(wv):
+                                acc_wind[idx, t] += w * wv
+                                wt_wind[idx, t] += w
+                            if not np.isnan(gv):
+                                acc_gust[idx, t] += w * gv
+                                wt_gust[idx, t] += w
+                            if not np.isnan(pv):
+                                acc_prcp[idx, t] += w * pv
+                                wt_prcp[idx, t] += w
+                            if not np.isnan(tv):
+                                acc_temp[idx, t] += w * tv
+                                wt_temp[idx, t] += w
 
                         model_pts_ok += 1
                 else:
@@ -505,15 +664,24 @@ class Command(BaseCommand):
             f"and computing risk scores..."
         )
 
-        # Normalise: divide accumulated sums by total weight
-        mask = acc_wt > 0
-        acc_wind = np.where(mask, acc_wind / acc_wt, 0.0)
-        acc_gust = np.where(mask, acc_gust / acc_wt, 0.0)
-        acc_prcp = np.where(mask, acc_prcp / acc_wt, 0.0)
-        acc_temp = np.where(mask, acc_temp / acc_wt, 10.0)
+        # Normalise each variable by the weight actually applied to it.
+        # Cells with no contributing model become NaN and are skipped below,
+        # rather than being written out as a fabricated calm/mild reading.
+        def _normalise(acc, wt):
+            with np.errstate(invalid="ignore", divide="ignore"):
+                return np.where(wt > 0, acc / np.where(wt > 0, wt, 1.0), np.nan)
 
-        # Free weight accumulator
-        del acc_wt
+        acc_wind = _normalise(acc_wind, wt_wind)
+        acc_gust = _normalise(acc_gust, wt_gust)
+        acc_prcp = _normalise(acc_prcp, wt_prcp)
+        acc_temp = _normalise(acc_temp, wt_temp)
+
+        # A cell is usable only when every input variable is present, since
+        # the risk score needs all four.
+        mask = (wt_wind > 0) & (wt_gust > 0) & (wt_prcp > 0) & (wt_temp > 0)
+
+        # Free weight accumulators
+        del wt_wind, wt_gust, wt_prcp, wt_temp
         gc.collect()
 
         # Build DB records in chunks
@@ -536,6 +704,11 @@ class Command(BaseCommand):
                 t = float(acc_temp[pt_idx, t_idx])
 
                 risk = calculate_hourly_risk(w, g, p, t, DEFAULT_THRESHOLDS)
+
+                # Defensive: never persist a NaN risk. It would serialise as
+                # an invalid JSON `NaN` token and break the map client.
+                if not np.isfinite(risk):
+                    continue
 
                 all_point_records.append(UKRiskGridPoint(
                     run=grid_run,
@@ -597,6 +770,12 @@ class Command(BaseCommand):
         grid_run.models_used = successful_models
         grid_run.save()
 
+        # ==============================================================
+        # PHASE 4b: PRE-RENDER CONTOUR OVERLAYS
+        # ==============================================================
+        if contour_vars:
+            self._render_contours(grid_run, contour_vars)
+
         elapsed = time.time() - start_time
 
         # Clean up old runs AFTER the new one is confirmed successful
@@ -608,6 +787,19 @@ class Command(BaseCommand):
         if old_count > 0:
             old_runs.delete()
             self.stdout.write(f"  Cleaned up {old_count} previous run(s) for today")
+
+        # Enforce a retention window. Without this, every run's grid points
+        # (and now contour images) accumulate forever — at 0.5° that is tens
+        # of thousands of rows per run, four runs a day.
+        cutoff = today - timedelta(days=retention_days)
+        stale = UKRiskGridRun.objects.filter(forecast_date__lt=cutoff)
+        stale_count = stale.count()
+        if stale_count:
+            stale.delete()
+            self.stdout.write(
+                f"  Retention: removed {stale_count} run(s) older than "
+                f"{retention_days} day(s)"
+            )
 
         # Also clean up old failed runs (keep last 5 for debugging)
         failed_runs = UKRiskGridRun.objects.filter(

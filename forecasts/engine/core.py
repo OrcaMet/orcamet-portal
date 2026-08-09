@@ -269,39 +269,89 @@ def fetch_ensemble(lat: float, lon: float, exposure: str,
     return _create_weighted_ensemble(ensemble_data, successful_models)
 
 
+ENSEMBLE_VARS = ("wind_speed", "wind_gusts", "precipitation", "temperature")
+
+
+def _to_float_array(values, n_times: int) -> np.ndarray:
+    """
+    Convert a raw API value list to a float array of length n_times.
+
+    Open-Meteo returns JSON null for missing hours; those become NaN so they
+    can be excluded from the blend rather than treated as real readings.
+    Returns None if the series cannot be used.
+    """
+    if values is None:
+        return None
+    arr = np.array(
+        [np.nan if v is None else v for v in values],
+        dtype=float,
+    )
+    if arr.shape[0] != n_times:
+        return None
+    return arr
+
+
 def _create_weighted_ensemble(ensemble_data: dict, model_names: list) -> pd.DataFrame:
-    """Blend multiple model outputs into a weighted ensemble DataFrame."""
+    """
+    Blend multiple model outputs into a weighted ensemble DataFrame.
+
+    Each variable is averaged using only the weight of the models that
+    actually contributed a finite value at that hour. Previously the weights
+    were normalised across every fetched model while models that returned a
+    mismatched or missing series were silently dropped from the sum, so the
+    blended values were divided by more weight than was applied — biasing
+    wind, gusts and precipitation low, and under-stating risk.
+    """
 
     ref_data = list(ensemble_data.values())[0]["data"]
     times = pd.to_datetime(ref_data["time"], utc=True)
     n_times = len(times)
 
-    ensemble_vars = {
-        "wind_speed": np.zeros(n_times),
-        "wind_gusts": np.zeros(n_times),
-        "precipitation": np.zeros(n_times),
-        "temperature": np.zeros(n_times),
-    }
-    raw_values = {var: [] for var in ensemble_vars}
+    weighted_sums = {var: np.zeros(n_times) for var in ENSEMBLE_VARS}
+    weight_sums = {var: np.zeros(n_times) for var in ENSEMBLE_VARS}
+    raw_values = {var: [] for var in ENSEMBLE_VARS}
 
     for model_name, model_info in ensemble_data.items():
         weight = model_info["weight"]
         data = model_info["data"]
 
-        for var in ensemble_vars:
-            values = data.get(var)
+        for var in ENSEMBLE_VARS:
+            values = _to_float_array(data.get(var), n_times)
             if values is None:
-                values = [np.nan] * n_times
-            values = np.array(values)
-            values = np.where(values is None, np.nan, values).astype(float)
-            if len(values) == n_times:
-                ensemble_vars[var] += weight * values
-                raw_values[var].append(values)
+                logger.warning(
+                    f"  {model_name}: unusable '{var}' series "
+                    f"(expected {n_times} values) — excluded from blend"
+                )
+                continue
+
+            finite = np.isfinite(values)
+            weighted_sums[var][finite] += weight * values[finite]
+            weight_sums[var][finite] += weight
+            raw_values[var].append(values)
+
+    # Divide by the weight actually applied at each hour. Hours where no
+    # model contributed stay NaN rather than silently reading as zero.
+    ensemble_vars = {}
+    for var in ENSEMBLE_VARS:
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ensemble_vars[var] = np.where(
+                weight_sums[var] > 0,
+                weighted_sums[var] / np.where(weight_sums[var] > 0, weight_sums[var], 1.0),
+                np.nan,
+            )
 
     spread = {}
     for var, vals_list in raw_values.items():
         if len(vals_list) > 1:
-            spread[f"{var}_spread"] = np.nanstd(vals_list, axis=0)
+            stacked = np.vstack(vals_list)
+            with np.errstate(invalid="ignore"):
+                # All-NaN columns would otherwise emit a RuntimeWarning.
+                counts = np.sum(np.isfinite(stacked), axis=0)
+                std = np.full(n_times, np.nan)
+                usable = counts > 0
+                if usable.any():
+                    std[usable] = np.nanstd(stacked[:, usable], axis=0)
+            spread[f"{var}_spread"] = std
         else:
             spread[f"{var}_spread"] = np.zeros(n_times)
 

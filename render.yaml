@@ -66,17 +66,25 @@ services:
       # - key: OPENMETEO_API_KEY
       #   value: your-api-key
 
-  # UK-wide risk contour map, refreshed every 6 hours. This matches the
-  # orcamet-portal_risk_grid cron job already running in the Render
-  # dashboard — kept here so the blueprint stays in sync with what's
-  # actually deployed.
+  # UK-wide risk grid + contour overlays, refreshed every 6 hours.
+  #
+  # NOTE: this job previously ran `generate_contour_cache`, which only writes
+  # the legacy UKRiskMap model. The interactive weather map reads
+  # UKRiskGridRun / UKRiskGridPoint / CachedContourImage, which only
+  # `risk_grid` populates — so the map had no data source at all and rendered
+  # empty. `risk_grid` now also pre-renders the contour overlays the map
+  # serves from /dashboard/map/contour.png.
+  #
+  # The live cron job is configured in the Render dashboard; updating this
+  # blueprint does not change it. The dashboard command must be changed to
+  # match for the fix to take effect in production.
   - type: cron
     plan: starter
     name: orcamet-portal_risk_grid
     runtime: python
     schedule: "0 */6 * * *"
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python manage.py generate_contour_cache"
+    startCommand: "python manage.py risk_grid"
     envVars:
       - key: DATABASE_URL
         fromDatabase:

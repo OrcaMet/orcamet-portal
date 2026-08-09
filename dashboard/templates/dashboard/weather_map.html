@@ -481,7 +481,13 @@ function contourUrl(timestamp, varName) {
     }
 
     function renderFrame(idx) {
-        if (!gridTimestamps.length) return;
+        if (!gridTimestamps.length) {
+            // No grid run yet. The contour timeline is unavailable, but site
+            // markers do not depend on it and must still be drawn — otherwise
+            // the map renders completely empty.
+            renderSites(0);
+            return;
+        }
 
         curIdx = Math.max(0, Math.min(idx, gridTimestamps.length - 1));
         var ts = gridTimestamps[curIdx];
@@ -612,9 +618,14 @@ function contourUrl(timestamp, varName) {
     }).then(function() {
         clearTimeout(bootTimeout);
 
-        var statusParts = [gridTimestamps.length + ' hours loaded'];
-        if (hasServerCache) statusParts.push('(cached — instant playback)');
-        document.getElementById('gstatus').textContent = statusParts.join(' ');
+        if (!gridTimestamps.length) {
+            document.getElementById('gstatus').textContent =
+                'No UK risk grid available — showing site markers only';
+        } else {
+            var statusParts = [gridTimestamps.length + ' hours loaded'];
+            if (hasServerCache) statusParts.push('(cached — instant playback)');
+            document.getElementById('gstatus').textContent = statusParts.join(' ');
+        }
 
         renderFrame(0);
 

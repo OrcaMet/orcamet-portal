@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OrcaMet Portal — Render Build Script
+# OrcaMet Portal - Render Build Script
 # Runs on every deploy
 
 set -o errexit

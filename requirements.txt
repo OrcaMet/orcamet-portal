@@ -1,10 +1,14 @@
+# Pinned to compatible-release ranges so a new major version of a
+# dependency cannot change behaviour on an unrelated deploy. Every Render
+# build and cron run resolves this file fresh.
+
 # Django core
 django~=5.1
-gunicorn
+gunicorn~=23.0
 
 # Database
-psycopg2-binary
-dj-database-url
+psycopg2-binary~=2.9
+dj-database-url~=2.2
 
 # Auth0
 authlib~=1.3
@@ -12,10 +16,10 @@ python-dotenv~=1.0
 requests~=2.31
 
 # Static files
-whitenoise[brotli]
+whitenoise[brotli]~=6.7
 
 # Forecast engine
-numpy
-pandas
-matplotlib
-scipy
+numpy~=2.1
+pandas~=2.2
+matplotlib~=3.9
+scipy~=1.14
