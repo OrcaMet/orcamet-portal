@@ -1,10 +1,6 @@
-import threading
-import logging
-
 from django.contrib import admin, messages
 from .models import Client, Site, ThresholdProfile, ChangeLog
-
-logger = logging.getLogger(__name__)
+from .signals import queue_forecast_generation
 
 
 class SiteInline(admin.TabularInline):
@@ -24,16 +20,6 @@ class ClientAdmin(admin.ModelAdmin):
     def site_count(self, obj):
         return obj.site_set.filter(is_active=True).count()
     site_count.short_description = "Active Sites"
-
-
-def _run_forecast_bg(site_id):
-    """Background thread for manual forecast trigger."""
-    try:
-        from forecasts.engine.runner import run_forecast_for_site
-        site = Site.objects.get(pk=site_id)
-        run_forecast_for_site(site)
-    except Exception as e:
-        logger.error(f"Manual forecast failed for site {site_id}: {e}", exc_info=True)
 
 
 @admin.register(Site)
@@ -61,22 +47,28 @@ class SiteAdmin(admin.ModelAdmin):
 
     @admin.action(description="Generate forecasts for selected sites")
     def generate_forecasts(self, request, queryset):
-        count = 0
-        for site in queryset:
-            if site.latitude and site.longitude and site.is_active:
-                thread = threading.Thread(
-                    target=_run_forecast_bg,
-                    args=(site.pk,),
-                    daemon=True,
-                )
-                thread.start()
-                count += 1
+        started = 0
+        already_running = 0
+        skipped = 0
 
-        messages.success(
-            request,
-            f"Forecast generation started for {count} site(s). "
-            f"Refresh in ~30 seconds to see results."
-        )
+        for site in queryset:
+            # `is None` rather than falsiness — longitude 0.0 is a valid UK
+            # location (the Greenwich meridian runs through Cambridgeshire).
+            if site.latitude is None or site.longitude is None or not site.is_active:
+                skipped += 1
+                continue
+            if queue_forecast_generation(site.pk, site.name):
+                started += 1
+            else:
+                already_running += 1
+
+        parts = [f"Forecast generation started for {started} site(s)."]
+        if already_running:
+            parts.append(f"{already_running} already had a run in progress.")
+        if skipped:
+            parts.append(f"{skipped} skipped (inactive or no coordinates).")
+
+        messages.success(request, " ".join(parts))
 
 
 @admin.register(ThresholdProfile)

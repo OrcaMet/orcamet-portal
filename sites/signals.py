@@ -56,6 +56,35 @@ def _generate_forecast_background(site_id: int):
         connection.close()
 
 
+def queue_forecast_generation(site_id: int, site_name: str = "") -> bool:
+    """
+    Start a background forecast run for this site unless one is already
+    in flight. Shared by the post_save signal below and the admin bulk
+    action (sites/admin.py) — both used to run their own separate thread
+    with no deduplication, so clicking "Generate forecasts" twice, or an
+    admin save landing while a signal-triggered run was still going,
+    could race on the delete-then-create in run_forecast_for_site.
+
+    Returns True if a run was started, False if one was already in flight.
+    """
+    with _inflight_lock:
+        if site_id in _inflight_sites:
+            logger.info(
+                f"Forecast already running for {site_name or site_id} — "
+                f"not starting another"
+            )
+            return False
+        _inflight_sites.add(site_id)
+
+    thread = threading.Thread(
+        target=_generate_forecast_background,
+        args=(site_id,),
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
 @receiver(post_save, sender=Site)
 def trigger_forecast_on_site_save(sender, instance, created, **kwargs):
     """
@@ -75,25 +104,9 @@ def trigger_forecast_on_site_save(sender, instance, created, **kwargs):
     action = "created" if created else "updated"
     logger.info(f"Site {action}: {site_name} — queuing forecast generation")
 
-    def _start():
-        # Claim the slot here rather than in the signal body: if the
-        # surrounding transaction rolls back this never runs, so the site can
-        # never be left permanently marked as in-flight.
-        with _inflight_lock:
-            if site_id in _inflight_sites:
-                logger.info(
-                    f"Forecast already running for {site_name} — not starting another"
-                )
-                return
-            _inflight_sites.add(site_id)
-
-        thread = threading.Thread(
-            target=_generate_forecast_background,
-            args=(site_id,),
-            daemon=True,
-        )
-        thread.start()
-
     # Wait for the surrounding transaction to commit. Otherwise the thread can
-    # query the site before the write is visible (or at all, if it rolls back).
-    transaction.on_commit(_start)
+    # query the site before the write is visible (or at all, if it rolls
+    # back) — and if it rolls back, claiming the in-flight slot immediately
+    # in the signal body would leave the site stuck marked as in-flight
+    # forever, since nothing would ever clear it.
+    transaction.on_commit(lambda: queue_forecast_generation(site_id, site_name))

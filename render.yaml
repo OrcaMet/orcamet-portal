@@ -45,13 +45,22 @@ services:
   # dashboard — kept here so the blueprint stays in sync with what's
   # actually deployed. Cron jobs require a paid plan — Render's free
   # plan does not support the cron service type.
+  #
+  # Also runs cleanup_forecasts (30-day default retention) afterwards.
+  # There was no cron job anywhere for it, so ForecastRun/HourlyForecast
+  # grew without bound — piggybacking it here avoids paying for a
+  # dedicated cron service just to run a cheap delete query.
+  #
+  # The live cron job is configured in the Render dashboard; updating this
+  # blueprint does not change it. The dashboard command must be changed to
+  # match for this to take effect in production.
   - type: cron
     plan: starter
     name: orcamet-portal_site_forecasts
     runtime: python
     schedule: "0 */6 * * *"
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python manage.py run_forecasts"
+    startCommand: "python manage.py run_forecasts && python manage.py cleanup_forecasts"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
