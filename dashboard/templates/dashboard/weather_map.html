@@ -61,6 +61,11 @@
 .speed-btn { font-size:0.62rem; padding:0.2rem 0.4rem; border:1px solid var(--border); background:var(--surface); color:var(--text-secondary); border-radius:3px; cursor:pointer; font-family:inherit; }
 .speed-btn:hover { color:#fff; border-color:var(--teal); }
 
+/* --- Hover readout --- */
+.hovertip { position:absolute; z-index:500; pointer-events:none; background:rgba(19,31,53,0.95); border:1px solid var(--border); border-radius:5px; padding:0.3rem 0.55rem; font-size:0.72rem; color:#fff; white-space:nowrap; display:none; transform:translate(-50%,-130%); box-shadow:0 2px 8px rgba(0,0,0,0.4); }
+.hovertip-v { font-weight:700; }
+.hovertip-l { color:var(--text-secondary); font-size:0.62rem; text-transform:uppercase; letter-spacing:0.4px; margin-left:0.3rem; }
+
 /* --- Legend --- */
 .lgnd { position:absolute; bottom:12px; right:12px; z-index:450; background:rgba(19,31,53,0.92); border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.6rem; backdrop-filter:blur(6px); min-width:95px; }
 .lgnd-t { font-size:0.6rem; font-weight:700; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.7px; margin-bottom:0.3rem; }
@@ -158,6 +163,7 @@
     <div class="mwrap">
         <div id="wmap"></div>
         <div class="lgnd" id="lgnd"></div>
+        <div class="hovertip" id="hovertip"><span class="hovertip-v" id="hovertip-v"></span><span class="hovertip-l" id="hovertip-l"></span></div>
         <div class="mload" id="mload">
             <div class="mload-bar"><div class="mload-fill" id="mfill"></div></div>
             <div class="mload-txt" id="mtxt">Loading contour map…</div>
@@ -198,10 +204,15 @@
     var HOUR_URL   = '{% url "dashboard:map_sites_hourly_json" %}';
     var CONTOUR_URL= '{% url "dashboard:map_contour_image" %}';
     var TS_URL     = '{% url "dashboard:map_contour_timestamps" %}';
+    var GRID_URL   = '{% url "dashboard:map_grid_points_json" %}';
 
     var UK_BOUNDS = [[49.9, -7.6], [58.7, 1.8]];
     var IMAGE_TIMEOUT = 15000;
     var PRELOAD_AHEAD = 6;
+    // Nearest-point hover cutoff, in degrees. Grid spacing is ~0.5°, so
+    // anything closer than this is "on" the grid; farther means the
+    // cursor is over open sea or outside the UK bounding box entirely.
+    var HOVER_MAX_DIST = 0.8;
 
     function ramp(v,s,h,hb){
         if(hb){if(v<=s)return 0;if(v>=h)return 1;return(v-s)/(h-s);}
@@ -220,6 +231,15 @@
         gust:  {t:'Gusts m/s',  s:[[0,[51,65,85],'0'],[10,[34,197,94],'10'],[20,[239,68,68],'20'],[35,[185,28,28],'35+']]},
         precip:{t:'Precip mm/h',s:[[0,[30,41,59],'0'],[0.5,[59,130,246],'0.5'],[3,[29,78,216],'3'],[8,[67,56,202],'8+']]},
         temp:  {t:'Temp °C',    s:[[-5,[37,99,235],'-5'],[2,[147,197,253],'2'],[15,[251,191,36],'15'],[25,[239,68,68],'25+']]}
+    };
+
+    // Index into a grid-points row [lat, lon, risk, wind, gust, precip, temp]
+    var FIELD_FOR_VAR = {
+        risk:   {idx: 2, unit: '%',    label: 'Risk'},
+        wind:   {idx: 3, unit: ' m/s', label: 'Wind'},
+        gust:   {idx: 4, unit: ' m/s', label: 'Gusts'},
+        precip: {idx: 5, unit: ' mm/h',label: 'Precip'},
+        temp:   {idx: 6, unit: '°C',   label: 'Temp'}
     };
 
     var map = L.map('wmap', {
@@ -271,6 +291,34 @@ function contourUrl(timestamp, varName) {
                 preloadImage(contourUrl(gridTimestamps[fi], varName));
             }
         }
+    }
+
+    var gridPointsCache = {};
+    var curGridPoints = null;
+
+    function fetchGridPoints(timestamp) {
+        var key = timestamp || '';
+        if (gridPointsCache[key]) {
+            if (gridPointsCache[key].then) {
+                gridPointsCache[key].then(function(pts) { curGridPoints = pts; });
+            } else {
+                curGridPoints = gridPointsCache[key];
+            }
+            return;
+        }
+        var url = GRID_URL + '?run=' + encodeURIComponent(gridRunKey) +
+            (timestamp ? '&timestamp=' + encodeURIComponent(timestamp) : '');
+        var req = fetchWithTimeout(url, 10000).then(function(d) {
+            var pts = d.points || [];
+            gridPointsCache[key] = pts;
+            curGridPoints = pts;
+            return pts;
+        }).catch(function(e) {
+            console.warn('grid-points:', e);
+            gridPointsCache[key] = [];
+            return [];
+        });
+        gridPointsCache[key] = req;
     }
 
     function setContourOverlay(url) {
@@ -500,6 +548,7 @@ function contourUrl(timestamp, varName) {
 
         loadContourImage(ts, curVar);
         preloadAhead(curIdx, curVar);
+        fetchGridPoints(ts);
         renderSites(curIdx);
     }
 
@@ -577,6 +626,46 @@ function contourUrl(timestamp, varName) {
             preloadImage(contourUrl(ts, varName));
         });
     }
+
+    var $hovertip  = document.getElementById('hovertip');
+    var $hovertipV = document.getElementById('hovertip-v');
+    var $hovertipL = document.getElementById('hovertip-l');
+
+    function nearestGridPoint(lat, lon) {
+        if (!curGridPoints || !curGridPoints.length) return null;
+        var best = null, bestD = Infinity;
+        for (var i = 0; i < curGridPoints.length; i++) {
+            var p = curGridPoints[i];
+            var dLat = p[0] - lat, dLon = p[1] - lon;
+            var d = dLat * dLat + dLon * dLon;
+            if (d < bestD) { bestD = d; best = p; }
+        }
+        if (best === null || Math.sqrt(bestD) > HOVER_MAX_DIST) return null;
+        return best;
+    }
+
+    map.on('mousemove', function(e) {
+        var pt = nearestGridPoint(e.latlng.lat, e.latlng.lng);
+        if (!pt) {
+            $hovertip.style.display = 'none';
+            return;
+        }
+        var f = FIELD_FOR_VAR[curVar];
+        var v = pt[f.idx];
+        if (v == null) {
+            $hovertip.style.display = 'none';
+            return;
+        }
+        $hovertipV.textContent = v.toFixed(1) + f.unit;
+        $hovertipL.textContent = f.label;
+        $hovertip.style.left = e.containerPoint.x + 'px';
+        $hovertip.style.top = e.containerPoint.y + 'px';
+        $hovertip.style.display = 'block';
+    });
+
+    map.on('mouseout', function() {
+        $hovertip.style.display = 'none';
+    });
 
     function dismissLoading() {
         document.getElementById('mfill').style.width = '100%';

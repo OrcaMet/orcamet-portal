@@ -304,6 +304,49 @@ def map_contour_image(request):
 
 
 @login_required(login_url="/login/")
+def map_grid_points_json(request):
+    """
+    Raw grid point values for a run/timestamp, powering the map's
+    hover-to-read-value tooltip. The contour image is a static PNG with
+    no client-side access to the underlying numbers, so this exposes
+    them separately for a nearest-point lookup under the cursor.
+    """
+    run_key = request.GET.get("run")
+    timestamp = request.GET.get("timestamp")
+
+    run = None
+    if run_key and run_key.isdigit():
+        run = UKRiskGridRun.objects.filter(
+            pk=int(run_key), status=UKRiskGridRun.Status.SUCCESS
+        ).first()
+    if run is None:
+        run = UKRiskGridRun.objects.filter(
+            status=UKRiskGridRun.Status.SUCCESS
+        ).order_by("-generated_at").first()
+
+    if not run:
+        return JsonResponse({"points": []})
+
+    points_qs = UKRiskGridPoint.objects.filter(run=run)
+
+    parsed = parse_datetime(timestamp) if timestamp else None
+    if parsed:
+        points_qs = points_qs.filter(timestamp=parsed)
+    else:
+        first_ts = points_qs.order_by("timestamp").values_list("timestamp", flat=True).first()
+        points_qs = points_qs.filter(timestamp=first_ts) if first_ts else points_qs.none()
+
+    # Flat arrays instead of objects — this list is ~380 entries fetched
+    # once per frame, so the key-name overhead of a dict per point adds up.
+    points = [
+        [p.latitude, p.longitude, _num(p.risk), _num(p.wind_speed), _num(p.wind_gusts), _num(p.precipitation), _num(p.temperature)]
+        for p in points_qs
+    ]
+
+    return JsonResponse({"points": points})
+
+
+@login_required(login_url="/login/")
 def map_contour_timestamps(request):
     """List available contour timestamps for the latest UK risk grid run."""
     run = UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS).order_by("-generated_at").first()
