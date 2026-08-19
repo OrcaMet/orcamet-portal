@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import ForecastRun, HourlyForecast, UKRiskMap
+from .models import ForecastRun, HourlyForecast
 
 
 class HourlyForecastInline(admin.TabularInline):
@@ -19,8 +19,3 @@ class ForecastRunAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "site__client", "forecast_date")
     inlines = [HourlyForecastInline]
-
-
-@admin.register(UKRiskMap)
-class UKRiskMapAdmin(admin.ModelAdmin):
-    list_display = ("forecast_date", "peak_risk", "grid_points", "generated_at")
