@@ -193,11 +193,12 @@ class Command(BaseCommand):
             help="Locations per API call (default: 50, max ~100)",
         )
         parser.add_argument(
-            "--contour-vars", type=str, default="risk",
+            "--contour-vars", type=str, default="risk,wind,gust,precip,temp",
             help=(
                 "Comma-separated variables to pre-render contour overlays for "
-                "(default: risk). Use 'none' to skip rendering. Each variable "
-                "adds one PNG per forecast hour to the database."
+                "(default: risk,wind,gust,precip,temp — all map tabs). Use "
+                "'none' to skip rendering. Each variable adds one PNG per "
+                "forecast hour to the database."
             ),
         )
         parser.add_argument(
