@@ -25,6 +25,9 @@
                 {{ site.client.name }} &middot; {{ site.postcode }} &middot; {{ site.get_exposure_display }}
                 {% if site.elevation %} &middot; {{ site.elevation }}m ASL{% endif %}
             </p>
+            {% if user.is_sandbox_user %}
+            <p><a href="{% url 'sites:site_edit' site.id %}" class="btn">Edit Site</a></p>
+            {% endif %}
         </div>
         {% if forecast_days %}
         <div class="site-header-status">

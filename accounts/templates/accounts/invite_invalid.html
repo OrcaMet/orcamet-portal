@@ -1,0 +1,17 @@
+{% extends "orcamet_portal/base.html" %}
+
+{% block title %}Invite Not Valid — OrcaMet Portal{% endblock %}
+
+{% block content %}
+<div class="error-page">
+    <h1>This Invite Link Isn't Valid</h1>
+    <p>
+        The signup link you used has expired, has already been used, or was
+        never valid.
+    </p>
+    <p>
+        If someone at OrcaMet sent you this link, ask them for a fresh one.
+    </p>
+    <a href="{% url 'accounts:index' %}" class="btn btn-primary">Return to Home</a>
+</div>
+{% endblock %}

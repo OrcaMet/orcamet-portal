@@ -1,0 +1,27 @@
+{% extends "orcamet_portal/base.html" %}
+
+{% block title %}Remove {{ site.name }} — OrcaMet Portal{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="dashboard-header">
+        <h1>Remove {{ site.name }}?</h1>
+    </div>
+
+    <div class="section">
+        <p>
+            This removes <strong>{{ site.name }}</strong> ({{ site.postcode }})
+            from your dashboard and frees up a slot so you can add another site.
+        </p>
+        <p>
+            Its forecast history is kept but stops updating.
+        </p>
+
+        <form method="post" class="form-actions">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-danger">Yes, Remove It</button>
+            <a href="{% url 'dashboard:site_detail' site.id %}" class="btn">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}

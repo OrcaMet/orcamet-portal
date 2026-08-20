@@ -12,8 +12,8 @@ class SiteInline(admin.TabularInline):
 
 @admin.register(Client)
 class ClientAdmin(admin.ModelAdmin):
-    list_display = ("name", "contact_name", "contact_email", "is_active", "site_count")
-    list_filter = ("is_active",)
+    list_display = ("name", "contact_name", "contact_email", "is_active", "is_sandbox", "site_count")
+    list_filter = ("is_active", "is_sandbox")
     search_fields = ("name", "contact_name", "contact_email")
     inlines = [SiteInline]
 

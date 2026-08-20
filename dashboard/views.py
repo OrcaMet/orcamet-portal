@@ -7,6 +7,7 @@ The main views a logged-in user sees.
 import json
 import math
 
+from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db.models import Max
 from django.http import Http404, HttpResponse, JsonResponse
@@ -80,6 +81,11 @@ def home(request):
     alert_count = sum(1 for s in sites_list if s.latest_run and s.latest_run.status == ForecastRun.Status.SUCCESS and s.latest_run.recommendation in ("CAUTION", "CANCEL"))
 
     context = {"user": user, "sites": sites_list, "site_count": len(sites_list), "latest_forecast_at": max(generated_times) if generated_times else None, "alert_count": alert_count}
+
+    # Trial accounts manage their own sites, within a cap.
+    if user.is_sandbox_user:
+        context["sandbox_site_cap"] = settings.SANDBOX_MAX_SITES
+        context["sandbox_may_add"] = len(sites_list) < settings.SANDBOX_MAX_SITES
 
     return render(request, "dashboard/home.html", context)
 

@@ -1,0 +1,54 @@
+{% extends "orcamet_portal/base.html" %}
+
+{% block title %}{% if site %}Edit {{ site.name }}{% else %}Add a Site{% endif %} — OrcaMet Portal{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="dashboard-header">
+        <h1>{% if site %}Edit {{ site.name }}{% else %}Add a Site{% endif %}</h1>
+        <p class="dashboard-role">
+            {{ user.client.name }} — using {{ sites_used }} of {{ sites_cap }} trial sites
+        </p>
+    </div>
+
+    <div class="section">
+        <form method="post" class="site-form">
+            {% csrf_token %}
+
+            {% if form.non_field_errors %}
+            <div class="alert alert-error">{{ form.non_field_errors }}</div>
+            {% endif %}
+
+            {% for field in form %}
+            <div class="form-row">
+                <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                {{ field }}
+                {% if field.help_text %}
+                <p class="form-help">{{ field.help_text }}</p>
+                {% endif %}
+                {% if field.errors %}
+                <p class="form-error">{{ field.errors|striptags }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+
+            <p class="form-help">
+                We geocode the postcode automatically, then build a forecast from
+                a blend of the UKV, ECMWF, ICON-EU and ARPEGE models. The first
+                forecast takes a minute or two to appear.
+            </p>
+
+            <div class="form-actions">
+                <button type="submit" class="btn btn-primary">
+                    {% if site %}Save Changes{% else %}Add Site{% endif %}
+                </button>
+                <a href="{% if site %}{% url 'dashboard:site_detail' site.id %}{% else %}{% url 'dashboard:home' %}{% endif %}"
+                   class="btn">Cancel</a>
+                {% if site %}
+                <a href="{% url 'sites:site_delete' site.id %}" class="btn btn-danger">Remove Site</a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

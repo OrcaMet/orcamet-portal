@@ -20,6 +20,14 @@ class Client(models.Model):
     contact_email = models.EmailField(blank=True)
     contact_phone = models.CharField(max_length=30, blank=True)
     is_active = models.BooleanField(default=True)
+    is_sandbox = models.BooleanField(
+        default=False,
+        help_text=(
+            "A private trial workspace created by an invite link, not a real "
+            "paying client. Sandbox owners may add and edit their own sites "
+            "through the portal, subject to SANDBOX_MAX_SITES."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True)
 

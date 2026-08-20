@@ -1,0 +1,19 @@
+{% extends "orcamet_portal/base.html" %}
+
+{% block title %}Verify Your Email — OrcaMet Portal{% endblock %}
+
+{% block content %}
+<div class="error-page">
+    <h1>Please Verify Your Email</h1>
+    <p>
+        We can't finish setting up your trial account until
+        {% if email %}<strong>{{ email }}</strong>{% else %}your email address{% endif %}
+        has been confirmed.
+    </p>
+    <p>
+        Check your inbox for a verification message, click the link inside,
+        then open your invite link again.
+    </p>
+    <a href="{% url 'accounts:index' %}" class="btn btn-primary">Return to Home</a>
+</div>
+{% endblock %}

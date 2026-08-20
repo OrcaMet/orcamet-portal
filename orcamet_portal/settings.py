@@ -203,6 +203,16 @@ AUTH0_CLIENT_SECRET = os.environ.get("AUTH0_CLIENT_SECRET", "")
 
 
 # ============================================================
+# SANDBOX / TRIAL ACCOUNTS
+# ============================================================
+
+# How many active sites one invite-provisioned sandbox client may create.
+# Every new site fires a live Open-Meteo forecast run, so this is a cost and
+# rate-limit guard, not a product tier. Real clients are not affected.
+SANDBOX_MAX_SITES = int(os.environ.get("SANDBOX_MAX_SITES", "3"))
+
+
+# ============================================================
 # INTERNATIONALISATION
 # ============================================================
 

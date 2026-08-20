@@ -11,6 +11,7 @@ from django.contrib.auth import login as django_login, logout as django_logout
 from urllib.parse import quote_plus, urlencode
 
 from .models import User
+from .provisioning import SESSION_KEY, lookup_invite, provision_sandbox_user
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,37 @@ def login_view(request):
     return oauth.auth0.authorize_redirect(
         request,
         request.build_absolute_uri(reverse("accounts:callback")),
+    )
+
+
+def signup_view(request):
+    """
+    Entry point for an invite link: /signup/?invite=<code>
+
+    Validates the code, parks it in the session, and hands off to Auth0. The
+    session is where the code has to live — Auth0 sends the user back to a
+    fixed callback URL, so it cannot ride along in the query string.
+    """
+    if request.user.is_authenticated:
+        return redirect("dashboard:home")
+
+    code = request.GET.get("invite", "")
+    invite = lookup_invite(code)
+
+    if invite is None:
+        # Deliberately does not distinguish "no such code" from "revoked" or
+        # "used up": that difference is only useful to someone guessing codes.
+        logger.info("Signup attempted with an invalid invite code")
+        return render(request, "accounts/invite_invalid.html", status=404)
+
+    request.session[SESSION_KEY] = invite.code
+
+    return oauth.auth0.authorize_redirect(
+        request,
+        request.build_absolute_uri(reverse("accounts:callback")),
+        # Land on Auth0's sign-up tab rather than its login tab — the whole
+        # point of this link is that the person has no account yet.
+        screen_hint="signup",
     )
 
 
@@ -101,12 +133,40 @@ def callback_view(request):
             f"Refusing email-based account link for unverified address (sub={auth0_id})"
         )
 
+    # Nobody matched. If this login started from a valid invite link, create
+    # the account now; otherwise access is refused, as before.
+    if user is None:
+        invite = lookup_invite(request.session.get(SESSION_KEY))
+
+        if invite is not None and email and email_verified:
+            user = provision_sandbox_user(invite, auth0_id, email, name)
+            request.session.pop(SESSION_KEY, None)
+            if user is None:
+                # The invite was revoked or used up between the click and here.
+                return render(request, "accounts/invite_invalid.html", status=410)
+
+        elif invite is not None and not email_verified:
+            # Provisioning on an unverified address would let someone claim an
+            # invite under any address they like, including one belonging to a
+            # real client — which the email-matching branch above would then
+            # honour on a later login.
+            logger.warning(
+                f"Refusing invite signup for unverified address (sub={auth0_id})"
+            )
+            request.session.pop(SESSION_KEY, None)
+            return render(request, "accounts/verify_email.html", {
+                "email": email,
+            }, status=403)
+
     if user is None:
         logger.warning(f"No Django user found for sub={auth0_id}")
         return render(request, "accounts/no_access.html", {
             "email": email,
             "name": name,
         })
+
+    # Consume any leftover code so a stale invite cannot be reused later.
+    request.session.pop(SESSION_KEY, None)
 
     # Update name from Auth0 if we don't have it yet
     updated_fields = []
