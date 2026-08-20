@@ -19,6 +19,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.test import TestCase
+from django.utils import timezone
 
 from accounts.models import User
 from forecasts.models import MapThresholds
@@ -145,3 +146,56 @@ class MapThresholdsWiringTests(TestCase):
         self.assertNotIn("10,14", crisk.replace(" ", ""))
         self.assertNotIn("15,20", crisk.replace(" ", ""))
         self.assertIn("TH.", crisk)
+
+
+class GridPointsPayloadTests(TestCase):
+    """
+    The map reads grid values by array position, so the column order in
+    map/grid-points.json is a contract with FIELD_FOR_VAR in the template.
+    """
+
+    def setUp(self):
+        from forecasts.models import UKRiskGridPoint, UKRiskGridRun
+
+        client = Client.objects.create(name="Acme Rope")
+        self.user = User.objects.create_user(
+            username="dave", role=User.Role.CLIENT_ADMIN, client=client,
+        )
+        self.client.force_login(self.user)
+
+        run = UKRiskGridRun.objects.create(
+            forecast_date=timezone.localdate(),
+            status=UKRiskGridRun.Status.SUCCESS,
+            lat_min=49.9, lat_max=58.7, lon_min=-7.6, lon_max=1.8,
+        )
+        UKRiskGridPoint.objects.create(
+            run=run, latitude=55.0, longitude=-3.0,
+            timestamp=timezone.now(),
+            wind_speed=5.0, wind_gusts=9.0, precipitation=0.2,
+            temperature=11.0, risk=14.0, p_cancel=37.5, ensemble_members=51,
+        )
+
+    def test_cancellation_is_the_eighth_column(self):
+        payload = self.client.get("/dashboard/map/grid-points.json").json()
+        row = payload["points"][0]
+
+        self.assertEqual(len(row), 8)
+        self.assertEqual(row[7], 37.5)
+
+    def test_template_reads_cancellation_from_that_index(self):
+        source = TEMPLATE.read_text(encoding="utf-8")
+        match = re.search(r"pcancel:\s*\{idx:\s*(\d+)", source)
+
+        self.assertIsNotNone(match, "map does not expose a cancellation layer")
+        self.assertEqual(int(match.group(1)), 7)
+
+    def test_default_layer_is_cancellation(self):
+        source = TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("var curVar = 'pcancel';", source)
+
+    def test_site_markers_use_the_hard_gate_not_the_severity_score(self):
+        """recOf() cannot represent a breach; verdictOf() can."""
+        source = TEMPLATE.read_text(encoding="utf-8")
+
+        self.assertIn("function verdictOf(", source)
+        self.assertNotIn("recOf(risk)", source)

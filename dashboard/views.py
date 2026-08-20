@@ -391,7 +391,8 @@ def map_grid_points_json(request):
     # Flat arrays instead of objects — this list is ~380 entries fetched
     # once per frame, so the key-name overhead of a dict per point adds up.
     points = [
-        [p.latitude, p.longitude, _num(p.risk), _num(p.wind_speed), _num(p.wind_gusts), _num(p.precipitation), _num(p.temperature)]
+        # Index 7 is p_cancel; the client's FIELD_FOR_VAR maps by position.
+        [p.latitude, p.longitude, _num(p.risk), _num(p.wind_speed), _num(p.wind_gusts), _num(p.precipitation), _num(p.temperature), _num(p.p_cancel)]
         for p in points_qs
     ]
 

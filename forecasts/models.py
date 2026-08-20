@@ -191,6 +191,18 @@ class UKRiskGridPoint(models.Model):
     temperature = models.FloatField(default=0.0)
     risk = models.FloatField(default=0.0, help_text="Risk score 0-100%")
 
+    # Share of ensemble members breaching any cancel limit at this hour, as a
+    # percentage. Null when the grid was built without ensemble data, which
+    # must stay distinct from a genuine zero.
+    p_cancel = models.FloatField(
+        null=True, blank=True,
+        help_text="Chance of cancellation at this hour, 0-100%",
+    )
+    ensemble_members = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        help_text="Members backing p_cancel at this point",
+    )
+
     class Meta:
         ordering = ["timestamp", "latitude", "longitude"]
         indexes = [models.Index(fields=["run", "timestamp"], name="forecasts_u_run_id_3b3b76_idx")]
@@ -200,6 +212,7 @@ class UKRiskGridPoint(models.Model):
 
 class CachedContourImage(models.Model):
     class Variable(models.TextChoices):
+        PCANCEL = "pcancel", "Chance of Cancellation"
         RISK = "risk", "Risk"
         WIND = "wind", "Wind Speed"
         GUST = "gust", "Wind Gusts"

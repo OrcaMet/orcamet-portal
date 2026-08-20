@@ -143,7 +143,7 @@
         <div class="tbar-l">
             <span class="tbar-brand">🗺️ Weather Map</span>
             <div class="pills" id="pills">
-                <button class="pill on" data-v="risk">Risk</button>
+                <button class="pill on" data-v="pcancel">Cancellation</button>
                 <button class="pill" data-v="wind">Wind</button>
                 <button class="pill" data-v="gust">Gusts</button>
                 <button class="pill" data-v="precip">Precip</button>
@@ -254,10 +254,39 @@
               + .10*tempRamp(t);
         return Math.min(100,Math.max(0,sig(6*(r-.45))*100));
     }
+
+    /* Hard gate, mirroring core.evaluate_thresholds(). The severity score
+       above is kept only for ordering within a band — it cannot represent a
+       breach, so it must not decide the band. Gusts carry 0.40 on a scale
+       centred at 0.45, which capped them at CAUTION however extreme. */
+    function verdictOf(w,g,p,t){
+        var worst = 'GO';
+        function hit(level){
+            if (level === 'CANCEL') worst = 'CANCEL';
+            else if (worst === 'GO') worst = 'CAUTION';
+        }
+        function gate(v, caution, cancel){
+            if (v == null || isNaN(v)) return;
+            if (cancel != null && v >= cancel) hit('CANCEL');
+            else if (caution != null && v >= caution) hit('CAUTION');
+        }
+        gate(w, TH.wind_mean_caution, TH.wind_mean_cancel);
+        gate(g, TH.gust_caution, TH.gust_cancel);
+        gate(p, TH.precip_caution, TH.precip_cancel);
+
+        if (t != null && !isNaN(t)) {
+            if ((TH.temp_min_cancel != null && t <= TH.temp_min_cancel) ||
+                (TH.temp_max_cancel != null && t >= TH.temp_max_cancel)) hit('CANCEL');
+            else if ((TH.temp_min_caution != null && t <= TH.temp_min_caution) ||
+                     (TH.temp_max_caution != null && t >= TH.temp_max_caution)) hit('CAUTION');
+        }
+        return worst;
+    }
+
     function recOf(r){return r<20?'GO':r<50?'CAUTION':'CANCEL';}
 
     var SC={
-        risk:  {t:'Risk %',     s:[[0,[34,197,94],'0%'],[20,[34,197,94],'20%'],[50,[245,158,11],'50%'],[100,[185,28,28],'100%']]},
+        pcancel:{t:'Chance of cancellation', s:[[0,[26,152,80],'0%'],[25,[166,217,106],'25%'],[50,[254,224,139],'50%'],[75,[244,109,67],'75%'],[100,[165,0,38],'100%']]},
         wind:  {t:'Wind m/s',   s:[[0,[51,65,85],'0'],[7,[34,197,94],'7'],[10,[245,158,11],'10'],[25,[185,28,28],'25+']]},
         gust:  {t:'Gusts m/s',  s:[[0,[51,65,85],'0'],[10,[34,197,94],'10'],[20,[239,68,68],'20'],[35,[185,28,28],'35+']]},
         precip:{t:'Precip mm/h',s:[[0,[30,41,59],'0'],[0.5,[59,130,246],'0.5'],[3,[29,78,216],'3'],[8,[67,56,202],'8+']]},
@@ -266,7 +295,7 @@
 
     // Index into a grid-points row [lat, lon, risk, wind, gust, precip, temp]
     var FIELD_FOR_VAR = {
-        risk:   {idx: 2, unit: '%',    label: 'Risk'},
+        pcancel:{idx: 7, unit: '%',    label: 'Chance of cancellation'},
         wind:   {idx: 3, unit: ' m/s', label: 'Wind'},
         gust:   {idx: 4, unit: ' m/s', label: 'Gusts'},
         precip: {idx: 5, unit: ' mm/h',label: 'Precip'},
@@ -472,7 +501,7 @@ function contourUrl(timestamp, varName) {
 
     function popHr(p,ts){
         var risk = cRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
-        var r = recOf(risk);
+        var r = verdictOf(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
         var d = new Date(ts);
         var tm = TIME_FMT.format(d);
         var dt = DATE_FMT.format(d);
@@ -493,7 +522,7 @@ function contourUrl(timestamp, varName) {
     var siteGJ = null;
     var hourlyD = null;
     var curIdx = 0;
-    var curVar = 'risk';
+    var curVar = 'pcancel';
     var playTmr = null;
     var playSpeeds = [1500, 1000, 600, 2000];
     var playSpeedIdx = 0;
@@ -553,8 +582,7 @@ function contourUrl(timestamp, varName) {
                 frame.features.forEach(function(f) {
                     var c = f.geometry.coordinates;
                     var p = f.properties;
-                    var risk = cRisk(p.wind_speed, p.wind_gusts, p.precipitation, p.temperature);
-                    var rec = recOf(risk);
+                    var rec = verdictOf(p.wind_speed, p.wind_gusts, p.precipitation, p.temperature);
                     var m = L.marker([c[1], c[0]], {icon: mkI(rec)});
                     m.bindPopup(popHr(p, ts), {maxWidth: 290, minWidth: 230});
                     siteCluster.addLayer(m);

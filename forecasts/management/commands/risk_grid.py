@@ -1,20 +1,23 @@
 """
-OrcaMet Portal — risk_grid management command (Multi-Model Ensemble)
+OrcaMet Portal — risk_grid management command (ensemble)
 
-Fetches weather data for a UK grid from ALL eligible models using BATCH
-API calls to Open-Meteo, blends with geographic-aware weighting (matching
-the site-specific forecast engine in core.py), and stores hourly ensemble
-risk scores for the interactive contour map.
+Builds the UK contour map from an ensemble rather than a blend of
+deterministic models, so the headline layer can be a chance of
+cancellation rather than a severity index.
 
-MEMORY-EFFICIENT: Processes one model at a time, accumulating weighted
-sums into numpy arrays and discarding raw API data before fetching the
-next model. Peak memory is O(1 model) not O(all models).
+For each grid point it fetches ECMWF's 51 members, counts how many breach
+any cancel limit at each hour, and stores that share alongside the member
+mean of each weather variable.
+
+MEMORY-EFFICIENT: one batch of points at a time, accumulated into numpy
+arrays and discarded before the next. Peak memory is O(1 batch), not
+O(all members).
 
 Usage:
-    python manage.py risk_grid                     # Default 0.5° grid, all models
+    python manage.py risk_grid                     # Default 0.5° grid
     python manage.py risk_grid --resolution 0.25   # Finer grid
     python manage.py risk_grid --days 2            # 2-day forecast
-    python manage.py risk_grid --batch-size 30     # Smaller batches
+    python manage.py risk_grid --batch-size 5      # Gentler on rate limits
 
 This command also pre-renders the contour overlays the interactive map
 serves from /dashboard/map/contour.png (see --contour-vars).
@@ -36,12 +39,11 @@ from forecasts.models import (
 )
 from forecasts.engine.core import (
     calculate_hourly_risk,
-    get_model_weights,
-    is_in_domain,
     MODELS_CONFIG,
     OPENMETEO_HOST,
     _session,
 )
+from forecasts.engine import ensemble as ens
 
 logger = logging.getLogger(__name__)
 
@@ -62,19 +64,19 @@ UK_LON_MAX = 1.8
 
 HOURLY_VARS = "wind_speed_10m,wind_gusts_10m,precipitation,temperature_2m"
 
-# Models to use for the grid (subset of MODELS_CONFIG to reduce
-# API calls and memory on constrained environments like Render).
-# UKV = best UK detail, ECMWF = longest horizon backbone,
-# ICON-EU = Europe-wide, ARPEGE = synoptic backbone.
-GRID_MODELS = ["ukv", "ecmwf", "icon_eu", "arpege_europe"]
-
 # How many records to flush to DB at a time
 DB_BATCH_SIZE = 5000
 
-# Seconds to pause between API calls
-BATCH_DELAY = 2.0
-MODEL_DELAY = 5.0
-RATE_LIMIT_WAIT = 60
+# Seconds to pause between API calls.
+#
+# Ensemble payloads trip Open-Meteo's minutely limit long before its daily
+# one: a single 8-point ECMWF call carries 51 members across 4 variables, and
+# measured against the live API only about four such calls a minute are
+# sustainable. At 0.5 degrees the full grid is ~48 calls, so this pacing puts
+# a run at roughly 12 minutes — comfortable inside a 6-hourly cron, and far
+# better than a fast run that 429s away a third of the country.
+BATCH_DELAY = 15.0
+RATE_LIMIT_WAIT = 75
 
 
 # ============================================================
@@ -91,6 +93,21 @@ def _parse_timestamp(t_str):
         return dt
     else:
         return datetime.strptime(t_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+
+def _is_rate_limited(exc):
+    """
+    Did this failure come from Open-Meteo's rate limiter?
+
+    The shared session already retries 429 with backoff, then gives up and
+    raises a ConnectionError wrapping urllib3's MaxRetryError — so checking
+    for HTTPError alone misses every exhausted-retry case, which is exactly
+    the one worth waiting out.
+    """
+    response = getattr(exc, "response", None)
+    if response is not None and getattr(response, "status_code", None) == 429:
+        return True
+    return "429" in str(exc)
 
 
 def _safe_float(value):
@@ -173,7 +190,7 @@ def fetch_batch(model_name, lats, lons, start_date, end_date):
 # ============================================================
 
 class Command(BaseCommand):
-    help = "Generate UK-wide multi-model ensemble risk grid for the interactive contour map"
+    help = "Generate the UK-wide ensemble grid behind the interactive contour map"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -185,14 +202,18 @@ class Command(BaseCommand):
             help="Number of forecast days (default: 3)",
         )
         parser.add_argument(
-            "--batch-size", type=int, default=50,
-            help="Locations per API call (default: 50, max ~100)",
+            "--batch-size", type=int, default=10,
+            help=(
+                "Locations per API call (default: 10). Ensemble payloads are "
+                "large — 25 points of ECMWF is ~2 MB — and Open-Meteo's "
+                "minutely limit is reached well before the bandwidth is."
+            ),
         )
         parser.add_argument(
-            "--contour-vars", type=str, default="risk,wind,gust,precip,temp",
+            "--contour-vars", type=str, default="pcancel,wind,gust,precip,temp",
             help=(
                 "Comma-separated variables to pre-render contour overlays for "
-                "(default: risk,wind,gust,precip,temp — all map tabs). Use "
+                "(default: pcancel,wind,gust,precip,temp — all map tabs). Use "
                 "'none' to skip rendering. Each variable adds one PNG per "
                 "forecast hour to the database."
             ),
@@ -255,6 +276,7 @@ class Command(BaseCommand):
         from forecasts.engine.map_interpolation import render_contour_to_bytes
 
         field_for_var = {
+            "pcancel": "p_cancel",
             "risk": "risk",
             "wind": "wind_speed",
             "gust": "wind_gusts",
@@ -285,13 +307,19 @@ class Command(BaseCommand):
                 .values_list(
                     "latitude", "longitude", "risk",
                     "wind_speed", "wind_gusts", "precipitation", "temperature",
+                    "p_cancel",
                 )
             )
             if len(rows) < 4:
                 # interpolate_risk_surface needs at least 4 points
                 continue
 
-            arr = np.array(rows, dtype=float)
+            # None -> NaN, so a point with no ensemble members is
+            # excluded from the surface rather than drawn as 0%.
+            arr = np.array(
+                [[np.nan if v is None else v for v in row] for row in rows],
+                dtype=float,
+            )
             lats = arr[:, 0]
             lons = arr[:, 1]
             columns = {
@@ -300,13 +328,22 @@ class Command(BaseCommand):
                 "wind_gusts": arr[:, 4],
                 "precipitation": arr[:, 5],
                 "temperature": arr[:, 6],
+                "p_cancel": arr[:, 7],
             }
 
             images = []
             for var in contour_vars:
                 values = columns[field_for_var[var]]
+
+                # Drop points with no value for this variable; the surface is
+                # interpolated from what is known, not from invented zeroes.
+                usable = np.isfinite(values)
+                if usable.sum() < 4:
+                    continue
                 try:
-                    png = render_contour_to_bytes(lats, lons, values, variable=var)
+                    png = render_contour_to_bytes(
+                        lats[usable], lons[usable], values[usable], variable=var
+                    )
                 except Exception as e:
                     failed += 1
                     logger.warning(f"Contour render failed ({var} @ {ts}): {e}")
@@ -379,41 +416,19 @@ class Command(BaseCommand):
         # Fast lookup: (lat, lon) -> index in grid_points
         point_index = {pt: i for i, pt in enumerate(grid_points)}
 
-        # Determine which models cover which grid points
-        model_points = {}
-        for model_name in GRID_MODELS:
-            in_domain = [
-                pt for pt in grid_points
-                if is_in_domain(model_name, pt[0], pt[1])
-            ]
-            if in_domain:
-                model_points[model_name] = in_domain
-
-        if not model_points:
-            raise CommandError(
-                "No models have coverage for any grid points. "
-                "Check GRID_MODELS and DOMAIN_BOUNDS in core.py."
-            )
-
-        total_api_calls = sum(
-            (len(pts) + batch_size - 1) // batch_size
-            for pts in model_points.values()
-        )
+        # Domain filtering is gone with the deterministic models: the grid is
+        # now built from one global ensemble, which covers every UK point.
+        total_api_calls = (total_points + batch_size - 1) // batch_size
 
         self.stdout.write(
             f"\nGenerating UK ensemble risk grid: {len(lats)}×{len(lons)} = "
             f"{total_points} points at {resolution}° resolution"
         )
         self.stdout.write(f"  Period: {today} to {end_date} ({num_days} days)")
-        self.stdout.write(f"  Models: {len(model_points)} eligible")
-        for m, pts in model_points.items():
-            n_b = (len(pts) + batch_size - 1) // batch_size
-            self.stdout.write(
-                f"    {MODELS_CONFIG[m]['name']}: {len(pts)} pts → {n_b} calls"
-            )
+        self.stdout.write(f"  Ensemble: {ens.GRID_ENSEMBLE}")
         self.stdout.write(
             f"  Total API calls: {total_api_calls} "
-            f"(vs {total_points * len(model_points)} individual)"
+            f"({batch_size} points per call)"
         )
 
         # ==============================================================
@@ -436,19 +451,15 @@ class Command(BaseCommand):
             + "(caution/cancel — edit in Django admin)"
         )
 
-        # ==============================================================
-        # PRE-COMPUTE GEOGRAPHIC WEIGHTS
-        # ==============================================================
-        self.stdout.write("  Pre-computing geographic weights...")
-        weight_table = []
-        for lat, lon in grid_points:
-            w = get_model_weights(lat, lon, exposure="urban")
-            weight_table.append(w)
+        # Geographic model weighting is gone with the deterministic blend.
+        # It existed to lean on UKV's 2 km detail, which a 0.5° grid (~55 km
+        # cells) discards in the interpolation regardless — so nothing real
+        # is lost, and every member now counts equally.
 
         # ==============================================================
         # CREATE THE RUN RECORD
         # ==============================================================
-        models_used = list(model_points.keys())
+        models_used = [ens.GRID_ENSEMBLE]
         grid_run = UKRiskGridRun.objects.create(
             forecast_date=today,
             status=UKRiskGridRun.Status.RUNNING,
@@ -466,56 +477,59 @@ class Command(BaseCommand):
         # ==============================================================
         # PHASE 1: PROBE FOR TIMESTAMP AXIS
         # ==============================================================
-        probe_model = "ecmwf" if "ecmwf" in model_points else next(iter(model_points))
-        probe_pts = model_points[probe_model][:1]
         self.stdout.write(
-            f"\n  Probing {MODELS_CONFIG[probe_model]['name']} for timestamp axis..."
+            f"\n  Probing {ens.GRID_ENSEMBLE} for timestamp axis..."
         )
 
         try:
-            probe_result = fetch_batch(
-                probe_model,
-                [probe_pts[0][0]], [probe_pts[0][1]],
-                start_str, end_str,
+            ref_times, probe_points = ens.fetch_grid_members(
+                [grid_points[0][0]], [grid_points[0][1]],
+                forecast_days=num_days,
             )
             time.sleep(1.0)
         except Exception as e:
             grid_run.status = UKRiskGridRun.Status.FAILED
             grid_run.error_message = f"Probe failed: {e}"
             grid_run.save()
-            raise CommandError(f"Probe API call failed: {e}")
+            raise CommandError(f"Ensemble probe failed: {e}")
 
-        if not probe_result or probe_result[0] is None:
+        if not ref_times or not probe_points or probe_points[0] is None:
             grid_run.status = UKRiskGridRun.Status.FAILED
-            grid_run.error_message = "Probe returned no data"
+            grid_run.error_message = "Probe returned no ensemble members"
             grid_run.save()
             raise CommandError(
-                "Probe returned no data. Check API key and endpoint. "
-                f"Model: {probe_model}, URL: {MODELS_CONFIG[probe_model]['url']}"
+                "Ensemble probe returned no members. Check connectivity and "
+                f"the endpoint: {ens.ENSEMBLE_HOST}"
             )
 
-        ref_times = probe_result[0]["time"]
         num_hours = len(ref_times)
-        self.stdout.write(f"  Timestamp axis: {num_hours} hours")
+        self.stdout.write(
+            f"  Timestamp axis: {num_hours} hours, "
+            f"{len(probe_points[0])} members per point"
+        )
 
         # ==============================================================
         # PHASE 2: ALLOCATE NUMPY ACCUMULATORS
         # ==============================================================
+        # Sums of member values, for the displayed weather layers, plus a
+        # per-variable count so a variable missing from some members is
+        # divided by what actually contributed rather than by the total.
         acc_wind = np.zeros((total_points, num_hours), dtype=np.float32)
         acc_gust = np.zeros((total_points, num_hours), dtype=np.float32)
         acc_prcp = np.zeros((total_points, num_hours), dtype=np.float32)
         acc_temp = np.zeros((total_points, num_hours), dtype=np.float32)
 
-        # One weight accumulator per variable. A model can return a valid
-        # wind series but a null temperature for the same hour; a single
-        # shared weight total would then divide the temperature sum by weight
-        # that was never applied to it, biasing that variable low.
         wt_wind = np.zeros((total_points, num_hours), dtype=np.float32)
         wt_gust = np.zeros((total_points, num_hours), dtype=np.float32)
         wt_prcp = np.zeros((total_points, num_hours), dtype=np.float32)
         wt_temp = np.zeros((total_points, num_hours), dtype=np.float32)
 
-        mem_mb = total_points * num_hours * 8 * 4 / 1024 / 1024
+        # Members breaching any cancel limit, and members present at all.
+        # Their ratio is the chance of cancellation.
+        breach_counts = np.zeros((total_points, num_hours), dtype=np.int16)
+        member_counts = np.zeros((total_points,), dtype=np.int16)
+
+        mem_mb = total_points * num_hours * 4 * 9 / 1024 / 1024
         self.stdout.write(
             f"  Accumulators: {total_points}×{num_hours} = {mem_mb:.1f} MB"
         )
@@ -524,168 +538,163 @@ class Command(BaseCommand):
         # PHASE 3: FETCH EACH MODEL, ACCUMULATE, DISCARD
         # ==============================================================
         api_calls_made = 0
-        successful_models = []
+        successful_models = [ens.GRID_ENSEMBLE]
         total_pts_ok = 0
         total_pts_fail = 0
 
-        for model_name, points in model_points.items():
-            model_display = MODELS_CONFIG[model_name]["name"]
-            n_batches = (len(points) + batch_size - 1) // batch_size
-            self.stdout.write(
-                f"\n  Fetching {model_display} "
-                f"({len(points)} pts, {n_batches} batches)..."
-            )
+        # Cancel limits, hoisted out of the loop.
+        c_wind = thresholds.get("wind_mean_cancel")
+        c_gust = thresholds.get("gust_cancel")
+        c_prcp = thresholds.get("precip_cancel")
+        c_cold = thresholds.get("temp_min_cancel")
+        c_hot = thresholds.get("temp_max_cancel")
 
-            model_pts_ok = 0
-            model_pts_fail = 0
+        VAR_SLOTS = (
+            ("wind_speed_10m", acc_wind, wt_wind),
+            ("wind_gusts_10m", acc_gust, wt_gust),
+            ("precipitation", acc_prcp, wt_prcp),
+            ("temperature_2m", acc_temp, wt_temp),
+        )
 
-            for batch_idx in range(n_batches):
-                b_start = batch_idx * batch_size
-                b_end = min(b_start + batch_size, len(points))
-                batch_pts = points[b_start:b_end]
-                batch_lats = [p[0] for p in batch_pts]
-                batch_lons = [p[1] for p in batch_pts]
+        n_batches = (total_points + batch_size - 1) // batch_size
+        self.stdout.write(
+            f"\n  Fetching {ens.GRID_ENSEMBLE} "
+            f"({total_points} pts, {n_batches} batches)..."
+        )
 
-                results = None
+        for batch_idx in range(n_batches):
+            b_start = batch_idx * batch_size
+            batch_pts = grid_points[b_start:b_start + batch_size]
+
+            try:
+                batch_times, per_point = ens.fetch_grid_members(
+                    [p[0] for p in batch_pts],
+                    [p[1] for p in batch_pts],
+                    forecast_days=num_days,
+                )
+                api_calls_made += 1
+            except Exception as e:
+                if not _is_rate_limited(e):
+                    self.stdout.write(self.style.ERROR(
+                        f"    Batch {batch_idx + 1}/{n_batches} failed: {e}"
+                    ))
+                    total_pts_fail += len(batch_pts)
+                    continue
+
+                # Worth waiting out rather than dropping: the alternative is
+                # a hole in the map where the limiter happened to bite.
+                self.stdout.write(self.style.WARNING(
+                    f"    Rate limited on batch {batch_idx + 1}/{n_batches} — "
+                    f"waiting {RATE_LIMIT_WAIT}s"
+                ))
+                time.sleep(RATE_LIMIT_WAIT)
                 try:
-                    results = fetch_batch(
-                        model_name, batch_lats, batch_lons,
-                        start_str, end_str,
+                    batch_times, per_point = ens.fetch_grid_members(
+                        [p[0] for p in batch_pts],
+                        [p[1] for p in batch_pts],
+                        forecast_days=num_days,
                     )
                     api_calls_made += 1
-                except requests.exceptions.HTTPError as e:
-                    if e.response is not None and e.response.status_code == 429:
-                        self.stdout.write(self.style.WARNING(
-                            f"    ⚠ Rate limited on batch {batch_idx + 1}/{n_batches}! "
-                            f"Waiting {RATE_LIMIT_WAIT}s..."
-                        ))
-                        time.sleep(RATE_LIMIT_WAIT)
-                        try:
-                            results = fetch_batch(
-                                model_name, batch_lats, batch_lons,
-                                start_str, end_str,
-                            )
-                            api_calls_made += 1
-                        except Exception as retry_e:
-                            self.stdout.write(self.style.ERROR(
-                                f"    ✗ Retry failed: {retry_e}"
-                            ))
-                    else:
-                        self.stdout.write(self.style.ERROR(
-                            f"    ✗ Batch {batch_idx + 1}/{n_batches} HTTP error: {e}"
-                        ))
-                except Exception as e:
+                except Exception as retry_e:
                     self.stdout.write(self.style.ERROR(
-                        f"    ✗ Batch {batch_idx + 1}/{n_batches} failed: {e}"
+                        f"    Retry failed: {retry_e}"
                     ))
+                    total_pts_fail += len(batch_pts)
+                    continue
 
-                # Accumulate results into numpy arrays
-                if results:
-                    for result in results:
-                        if result is None:
-                            model_pts_fail += 1
-                            continue
+            # Every point must sit on the axis the accumulators were sized
+            # for; a batch on a different axis would be written to the wrong
+            # hours, so drop it rather than misalign it.
+            if batch_times != ref_times:
+                self.stdout.write(self.style.WARNING(
+                    f"    Batch {batch_idx + 1}/{n_batches} returned a different "
+                    f"time axis — skipped"
+                ))
+                total_pts_fail += len(batch_pts)
+                continue
 
-                        key = (result["lat"], result["lon"])
-                        idx = point_index.get(key)
-                        if idx is None:
-                            model_pts_fail += 1
-                            continue
+            for j, members in enumerate(per_point):
+                if not members:
+                    total_pts_fail += 1
+                    continue
 
-                        w = weight_table[idx].get(model_name, 0.0)
-                        if w <= 0:
-                            continue
+                idx = point_index.get(batch_pts[j])
+                if idx is None:
+                    total_pts_fail += 1
+                    continue
 
-                        ws = result.get("wind_speed", [])
-                        gs = result.get("wind_gusts", [])
-                        ps = result.get("precipitation", [])
-                        ts = result.get("temperature", [])
-                        n_t = min(len(ws), len(gs), len(ps), len(ts), num_hours)
-
-                        for t in range(n_t):
-                            wv = _safe_float(ws[t] if t < len(ws) else None)
-                            gv = _safe_float(gs[t] if t < len(gs) else None)
-                            pv = _safe_float(ps[t] if t < len(ps) else None)
-                            tv = _safe_float(ts[t] if t < len(ts) else None)
-
-                            # Only accumulate values that are actually
-                            # present, and only add the weight where it was
-                            # applied. Missing readings contribute nothing
-                            # rather than being invented as benign.
-                            if not np.isnan(wv):
-                                acc_wind[idx, t] += w * wv
-                                wt_wind[idx, t] += w
-                            if not np.isnan(gv):
-                                acc_gust[idx, t] += w * gv
-                                wt_gust[idx, t] += w
-                            if not np.isnan(pv):
-                                acc_prcp[idx, t] += w * pv
-                                wt_prcp[idx, t] += w
-                            if not np.isnan(tv):
-                                acc_temp[idx, t] += w * tv
-                                wt_temp[idx, t] += w
-
-                        model_pts_ok += 1
-                else:
-                    model_pts_fail += len(batch_pts)
-
-                # Progress logging every 5 batches
-                if (batch_idx + 1) % 5 == 0 or batch_idx == n_batches - 1:
-                    self.stdout.write(
-                        f"    Batch {batch_idx + 1}/{n_batches} complete "
-                        f"({model_pts_ok} OK, {model_pts_fail} failed)"
+                stacked = {}
+                for var, acc, wt in VAR_SLOTS:
+                    arr = np.array(
+                        [[np.nan if v is None else v for v in m[var]] for m in members],
+                        dtype=np.float32,
                     )
+                    finite = np.isfinite(arr)
+                    acc[idx] += np.where(finite, arr, 0.0).sum(axis=0)
+                    wt[idx] += finite.sum(axis=0)
+                    stacked[var] = arr
 
-                # Pause between batches to respect rate limits
-                time.sleep(BATCH_DELAY)
+                # A member cancels this hour if ANY variable breaches its
+                # cancel limit. Evaluated per member so correlation between
+                # variables is carried by the scenario, not assumed.
+                # NaN compares False throughout, which correctly reads as
+                # "no evidence of a breach" rather than inventing one.
+                breach = np.zeros(stacked["wind_gusts_10m"].shape, dtype=bool)
+                if c_wind is not None:
+                    breach |= stacked["wind_speed_10m"] > c_wind
+                if c_gust is not None:
+                    breach |= stacked["wind_gusts_10m"] > c_gust
+                if c_prcp is not None:
+                    breach |= stacked["precipitation"] > c_prcp
+                if c_cold is not None:
+                    breach |= stacked["temperature_2m"] <= c_cold
+                if c_hot is not None:
+                    breach |= stacked["temperature_2m"] >= c_hot
 
-            # Log model result
-            total_pts_ok += model_pts_ok
-            total_pts_fail += model_pts_fail
+                breach_counts[idx] = breach.sum(axis=0)
+                member_counts[idx] = len(members)
+                total_pts_ok += 1
 
-            if model_pts_ok > 0:
-                successful_models.append(model_name)
-                self.stdout.write(self.style.SUCCESS(
-                    f"  ✓ {model_display}: {model_pts_ok} pts OK"
-                    + (f", {model_pts_fail} failed" if model_pts_fail else "")
-                ))
-            else:
-                self.stdout.write(self.style.ERROR(
-                    f"  ✗ {model_display}: ALL {model_pts_fail} points failed"
-                ))
-
-            # Free memory after each model
+            del per_point
             gc.collect()
 
-            # Pause between models
-            time.sleep(MODEL_DELAY)
+            if (batch_idx + 1) % 5 == 0 or batch_idx == n_batches - 1:
+                self.stdout.write(
+                    f"    Batch {batch_idx + 1}/{n_batches} complete "
+                    f"({total_pts_ok} OK, {total_pts_fail} failed)"
+                )
 
-        # Check we got at least some data
-        if not successful_models:
+            time.sleep(BATCH_DELAY)
+
+        if not total_pts_ok:
             grid_run.status = UKRiskGridRun.Status.FAILED
             grid_run.error_message = (
-                f"All {len(model_points)} models failed. "
-                f"API calls made: {api_calls_made}. "
-                f"Check OPENMETEO_API_KEY and network connectivity."
+                f"No grid point returned ensemble members. "
+                f"API calls made: {api_calls_made}."
             )
             grid_run.save()
             raise CommandError(
-                f"All models failed after {api_calls_made} API calls. "
-                f"Host: {OPENMETEO_HOST}, "
-                f"API key set: {bool(getattr(settings, 'OPENMETEO_API_KEY', ''))}"
+                f"Ensemble fetch produced nothing after {api_calls_made} calls. "
+                f"Host: {ens.ENSEMBLE_HOST}"
             )
+
+        self.stdout.write(self.style.SUCCESS(
+            f"  {ens.GRID_ENSEMBLE}: {total_pts_ok} pts OK"
+            + (f", {total_pts_fail} failed" if total_pts_fail else "")
+        ))
 
         # ==============================================================
         # PHASE 4: NORMALISE AND COMPUTE RISK SCORES
         # ==============================================================
         self.stdout.write(
-            f"\n  Normalising ensemble from {len(successful_models)} models "
-            f"and computing risk scores..."
+            f"\n  Averaging {total_pts_ok} points and computing "
+            f"chance of cancellation..."
         )
 
-        # Normalise each variable by the weight actually applied to it.
-        # Cells with no contributing model become NaN and are skipped below,
-        # rather than being written out as a fabricated calm/mild reading.
+        # Mean of the members that actually reported, per variable. Counting
+        # per variable matters: a member can carry a valid wind series and a
+        # null temperature for the same hour, and dividing by the total member
+        # count would then bias that variable low.
         def _normalise(acc, wt):
             with np.errstate(invalid="ignore", divide="ignore"):
                 return np.where(wt > 0, acc / np.where(wt > 0, wt, 1.0), np.nan)
@@ -695,12 +704,22 @@ class Command(BaseCommand):
         acc_prcp = _normalise(acc_prcp, wt_prcp)
         acc_temp = _normalise(acc_temp, wt_temp)
 
-        # A cell is usable only when every input variable is present, since
-        # the risk score needs all four.
+        # A cell is usable only when every input variable is present.
         mask = (wt_wind > 0) & (wt_gust > 0) & (wt_prcp > 0) & (wt_temp > 0)
 
-        # Free weight accumulators
-        del wt_wind, wt_gust, wt_prcp, wt_temp
+        # Chance of cancellation: the share of this point's members breaching
+        # any cancel limit at that hour, as a percentage. Points that returned
+        # no members stay NaN and are skipped, rather than reading as 0%,
+        # which would render as a reassuring green.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            members_col = member_counts[:, None].astype(np.float32)
+            p_cancel_grid = np.where(
+                members_col > 0,
+                breach_counts / np.where(members_col > 0, members_col, 1.0) * 100.0,
+                np.nan,
+            )
+
+        del wt_wind, wt_gust, wt_prcp, wt_temp, breach_counts
         gc.collect()
 
         # Build DB records in chunks
@@ -729,6 +748,8 @@ class Command(BaseCommand):
                 if not np.isfinite(risk):
                     continue
 
+                pc = float(p_cancel_grid[pt_idx, t_idx])
+
                 all_point_records.append(UKRiskGridPoint(
                     run=grid_run,
                     latitude=lat,
@@ -739,6 +760,9 @@ class Command(BaseCommand):
                     precipitation=round(p, 2),
                     temperature=round(t, 2),
                     risk=round(risk, 2),
+                    # Null rather than 0 when unknown — see the note above.
+                    p_cancel=round(pc, 2) if np.isfinite(pc) else None,
+                    ensemble_members=int(member_counts[pt_idx]) or None,
                 ))
 
                 # Flush to DB periodically to limit in-memory records
@@ -833,11 +857,7 @@ class Command(BaseCommand):
             f"\n  ✓ Complete: {total_records} records "
             f"({successful_points} points, {blend_errors} skipped) "
             f"in {elapsed:.0f}s using {api_calls_made} API calls "
-            f"across {len(successful_models)} models"
+            f"from {', '.join(successful_models)}"
         ))
-        self.stdout.write(
-            f"  Models: "
-            f"{', '.join(MODELS_CONFIG[m]['name'] for m in successful_models)}"
-        )
 
         return grid_run

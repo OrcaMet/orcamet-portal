@@ -137,6 +137,109 @@ def fetch_members(lat, lon, forecast_days=3, models=ENSEMBLE_MODELS):
     return times, members
 
 
+# The UK map uses ECMWF alone rather than all three ensembles.
+#
+# Two reasons. Rate limits are the binding constraint on the grid — a
+# batched ensemble call is heavy enough to trip Open-Meteo's minutely limit,
+# so a third of the calls matters more than a wider sample. And 51 members
+# is already plenty to read a probability surface off at 0.5° spacing.
+#
+# The same logic answers the UKV question: at ~55 km grid cells, a 2 km
+# deterministic model's detail is discarded by the interpolation anyway, so
+# nothing real is lost by leaving it out of the map.
+GRID_ENSEMBLE = "ecmwf_ifs025_ensemble"
+
+
+def fetch_grid_members(lats, lons, forecast_days=2, model=GRID_ENSEMBLE):
+    """
+    Fetch ensemble members for a batch of grid points in one call.
+
+    Returns (times, per_point) where per_point is a list aligned with the
+    requested coordinates; each entry is a list of member dicts, or None if
+    that location came back unusable.
+    """
+    resp = _session.get(
+        ENSEMBLE_HOST,
+        params={
+            "latitude": ",".join(f"{v:.4f}" for v in lats),
+            "longitude": ",".join(f"{v:.4f}" for v in lons),
+            "hourly": HOURLY_VARS,
+            "models": model,
+            "wind_speed_unit": "ms",
+            "precipitation_unit": "mm",
+            "timezone": "UTC",
+            "forecast_days": forecast_days,
+        },
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
+
+    # A single coordinate returns an object; several return a list.
+    if isinstance(payload, dict):
+        payload = [payload]
+
+    times = None
+    per_point = []
+
+    for entry in payload:
+        hourly = (entry or {}).get("hourly") or {}
+        point_times = hourly.get("time")
+        if not point_times:
+            per_point.append(None)
+            continue
+
+        if times is None:
+            times = point_times
+        elif point_times != times:
+            # Positional accumulation into a shared axis is only valid if the
+            # axes match. Drop the outlier rather than blend across hours.
+            logger.warning("Grid point returned a different time axis — skipped")
+            per_point.append(None)
+            continue
+
+        suffixes = sorted(
+            k[len("wind_gusts_10m"):]
+            for k in hourly
+            if k.startswith("wind_gusts_10m")
+        )
+
+        members = []
+        for suffix in suffixes:
+            member = {}
+            ok = True
+            for var in VARIABLES:
+                values = hourly.get(f"{var}{suffix}")
+                if values is None or len(values) != len(times):
+                    ok = False
+                    break
+                member[var] = values
+            if ok:
+                members.append(member)
+
+        per_point.append(members or None)
+
+    return times, per_point
+
+
+def count_breaches(members, thresholds, n_hours):
+    """
+    Per-hour count of members breaching any cancel limit at one grid point.
+
+    Returns a list of ints, length n_hours. Hourly rather than daily: the map
+    is a per-timestamp surface, so the question is "what share of scenarios
+    stop work at this hour", not "on this day".
+    """
+    counts = [0] * n_hours
+
+    for member in members:
+        for i in range(n_hours):
+            if _member_breaches_at(member, i, thresholds, "cancel"):
+                counts[i] += 1
+
+    return counts
+
+
 def _breaches(value, low, high):
     """Is this value outside the allowed band? None means no limit set."""
     if value is None:

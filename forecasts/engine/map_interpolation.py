@@ -44,6 +44,10 @@ OVERLAY_DPI = 100
 
 # Variable-specific colour map configuration
 VARIABLE_CMAPS = {
+    # Chance of cancellation. Uses the same green/amber/red reading as the
+    # verdict badges rather than "jet", so a colour on the map means the same
+    # thing it means everywhere else in the portal.
+    "pcancel": {"cmap": "RdYlGn_r", "vmin": 0,  "vmax": 100},
     "risk":   {"cmap": "jet",       "vmin": 0,  "vmax": 100},
     "wind":   {"cmap": "YlOrRd",    "vmin": 0,  "vmax": 25},
     "gust":   {"cmap": "YlOrRd",    "vmin": 0,  "vmax": 35},
