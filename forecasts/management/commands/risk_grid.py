@@ -30,7 +30,9 @@ import requests  # for requests.exceptions.HTTPError in the retry path
 from django.core.management.base import BaseCommand, CommandError
 from django.conf import settings
 
-from forecasts.models import UKRiskGridRun, UKRiskGridPoint, CachedContourImage
+from forecasts.models import (
+    UKRiskGridRun, UKRiskGridPoint, CachedContourImage, MapThresholds,
+)
 from forecasts.engine.core import (
     calculate_hourly_risk,
     get_model_weights,
@@ -52,17 +54,10 @@ UK_LAT_MAX = 58.7
 UK_LON_MIN = -7.6
 UK_LON_MAX = 1.8
 
-# Default thresholds for the grid (generic — no site-specific exposure)
-DEFAULT_THRESHOLDS = {
-    "wind_mean_caution": 10.0,
-    "wind_mean_cancel": 14.0,
-    "gust_caution": 15.0,
-    "gust_cancel": 20.0,
-    "precip_caution": 0.7,
-    "precip_cancel": 2.0,
-    "temp_min_caution": 1.0,
-    "temp_min_cancel": -2.0,
-}
+# Thresholds for the grid are generic — the map is UK-wide, so there is no
+# site-specific exposure to draw on. They now live in the MapThresholds
+# singleton, editable in the Django admin; the starting values are that
+# model's field defaults.
 
 HOURLY_VARS = "wind_speed_10m,wind_gusts_10m,precipitation,temperature_2m"
 
@@ -419,6 +414,21 @@ class Command(BaseCommand):
         )
 
         # ==============================================================
+        # RISK THRESHOLDS
+        # ==============================================================
+        # Read once per run, not per grid point: the values must not change
+        # part-way through, or one map would be scored two different ways.
+        thresholds = MapThresholds.load().as_dict()
+        self.stdout.write(
+            "  Risk thresholds: "
+            f"wind {thresholds['wind_mean_caution']}/{thresholds['wind_mean_cancel']}, "
+            f"gust {thresholds['gust_caution']}/{thresholds['gust_cancel']}, "
+            f"precip {thresholds['precip_caution']}/{thresholds['precip_cancel']}, "
+            f"temp {thresholds['temp_min_caution']}/{thresholds['temp_min_cancel']} "
+            "(caution/cancel — edit in Django admin)"
+        )
+
+        # ==============================================================
         # PRE-COMPUTE GEOGRAPHIC WEIGHTS
         # ==============================================================
         self.stdout.write("  Pre-computing geographic weights...")
@@ -704,7 +714,7 @@ class Command(BaseCommand):
                 p = float(acc_prcp[pt_idx, t_idx])
                 t = float(acc_temp[pt_idx, t_idx])
 
-                risk = calculate_hourly_risk(w, g, p, t, DEFAULT_THRESHOLDS)
+                risk = calculate_hourly_risk(w, g, p, t, thresholds)
 
                 # Defensive: never persist a NaN risk. It would serialise as
                 # an invalid JSON `NaN` token and break the map client.
