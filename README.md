@@ -39,7 +39,8 @@ orcamet-portal/
 │   └── templates/
 │
 ├── forecasts/                # Forecast storage and generation
-│   ├── models.py             # ForecastRun, HourlyForecast, UKRiskMap
+│   ├── models.py             # ForecastRun, HourlyForecast, UKRiskGridRun,
+│   │                         #   UKRiskGridPoint, CachedContourImage
 │   ├── engine/               # Your Python forecast scripts (Phase 2)
 │   └── management/commands/  # Django commands for cron jobs
 │

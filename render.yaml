@@ -7,13 +7,18 @@
 
 databases:
   - name: orcamet-db
-    plan: free
+    # Must match the live instance type in the Render dashboard. These
+    # resources are Blueprint managed, so a blueprint sync pushes whatever is
+    # declared here onto live infra — declaring `free` would attempt to
+    # downgrade the running database.
+    plan: basic-256mb
     databaseName: orcamet_portal
     user: orcamet
 
 services:
   - type: web
-    plan: free
+    # Live instance type (see the note on orcamet-db above).
+    plan: starter
     name: orcamet-portal
     runtime: python
     buildCommand: "bash build.sh"
@@ -56,7 +61,9 @@ services:
   # match for this to take effect in production.
   - type: cron
     plan: starter
-    name: orcamet-portal_site_forecasts
+    # Matches the live service name exactly (a space, not an underscore) so a
+    # blueprint sync updates that cron instead of creating a duplicate.
+    name: orcamet-portal_site forecasts
     runtime: python
     schedule: "0 */6 * * *"
     buildCommand: "pip install -r requirements.txt"
@@ -77,16 +84,13 @@ services:
 
   # UK-wide risk grid + contour overlays, refreshed every 6 hours.
   #
-  # NOTE: this job previously ran `generate_contour_cache`, which only writes
-  # the legacy UKRiskMap model. The interactive weather map reads
-  # UKRiskGridRun / UKRiskGridPoint / CachedContourImage, which only
-  # `risk_grid` populates — so the map had no data source at all and rendered
-  # empty. `risk_grid` now also pre-renders the contour overlays the map
-  # serves from /dashboard/map/contour.png.
+  # `risk_grid` is the only pipeline feeding the interactive weather map: it
+  # populates UKRiskGridRun / UKRiskGridPoint and pre-renders the contour
+  # overlays (CachedContourImage) served from /dashboard/map/contour.png.
   #
   # The live cron job is configured in the Render dashboard; updating this
   # blueprint does not change it. The dashboard command must be changed to
-  # match for the fix to take effect in production.
+  # match for any change here to take effect in production.
   - type: cron
     plan: starter
     name: orcamet-portal_risk_grid
