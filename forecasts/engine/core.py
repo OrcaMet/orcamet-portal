@@ -147,6 +147,37 @@ def ramp(value: float, soft: float, hard: float, high_bad: bool = True) -> float
         return (soft - value) / (soft - hard)
 
 
+def temperature_ramp(temp: float, thresholds: dict) -> float:
+    """
+    Two-sided temperature severity: cold at one end, heat at the other.
+
+    Rope access is limited by both — numb hands and ice below, heat stress
+    under PPE above. Returns whichever end is worse, so the pair shares the
+    single temperature weight in calculate_hourly_risk rather than letting
+    temperature quietly count twice.
+
+    The heat thresholds are optional. A thresholds dict without them, or with
+    them set to None, scores cold only — which is what every forecast did
+    before heat existed, and keeps historic ForecastRun.thresholds_snapshot
+    values replayable.
+    """
+    cold = ramp(temp, thresholds["temp_min_caution"], thresholds["temp_min_cancel"],
+                high_bad=False)
+
+    hot_caution = thresholds.get("temp_max_caution")
+    hot_cancel = thresholds.get("temp_max_cancel")
+    if hot_caution is None or hot_cancel is None:
+        return cold
+
+    heat = ramp(temp, hot_caution, hot_cancel, high_bad=True)
+
+    # max() would pick the number over a NaN, hiding missing data as a real
+    # low-risk reading.
+    if np.isnan(cold) or np.isnan(heat):
+        return np.nan
+    return max(cold, heat)
+
+
 def calculate_hourly_risk(wind: float, gust: float, precip: float, temp: float,
                           thresholds: dict = None) -> float:
     """
@@ -160,13 +191,14 @@ def calculate_hourly_risk(wind: float, gust: float, precip: float, temp: float,
             "gust_caution": 15.0, "gust_cancel": 20.0,
             "precip_caution": 0.7, "precip_cancel": 2.0,
             "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
+            "temp_max_caution": 27.0, "temp_max_cancel": 32.0,
         }
 
     r = (
         0.30 * ramp(wind, thresholds["wind_mean_caution"], thresholds["wind_mean_cancel"], high_bad=True) +
         0.40 * ramp(gust, thresholds["gust_caution"], thresholds["gust_cancel"], high_bad=True) +
         0.20 * ramp(precip, thresholds["precip_caution"], thresholds["precip_cancel"], high_bad=True) +
-        0.10 * ramp(temp, thresholds["temp_min_caution"], thresholds["temp_min_cancel"], high_bad=False)
+        0.10 * temperature_ramp(temp, thresholds)
     )
 
     if np.isnan(r):

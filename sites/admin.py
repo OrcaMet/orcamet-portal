@@ -75,10 +75,32 @@ class SiteAdmin(admin.ModelAdmin):
 class ThresholdProfileAdmin(admin.ModelAdmin):
     list_display = (
         "site", "is_active",
-        "wind_mean_cancel", "gust_cancel", "precip_cancel", "temp_min_cancel",
+        "wind_mean_cancel", "gust_cancel", "precip_cancel",
+        "temp_min_cancel", "temp_max_cancel",
         "created_at", "created_by",
     )
     list_filter = ("is_active", "site__client")
+
+    fieldsets = (
+        (None, {"fields": ("site", "is_active")}),
+        ("Wind (mean, 10m) — m/s", {"fields": ("wind_mean_caution", "wind_mean_cancel")}),
+        ("Gusts — m/s", {"fields": ("gust_caution", "gust_cancel")}),
+        ("Precipitation — mm/h", {"fields": ("precip_caution", "precip_cancel")}),
+        ("Temperature — cold (°C)", {
+            "fields": ("temp_min_caution", "temp_min_cancel"),
+            "description": "Colder is worse, so cancel must be <em>lower</em> than caution.",
+        }),
+        ("Temperature — heat (°C)", {
+            "fields": ("temp_max_caution", "temp_max_cancel"),
+            "description": (
+                "Hotter is worse, so cancel must be <em>higher</em> than caution. "
+                "Leave both blank to ignore heat at this site. Cold and heat share "
+                "one temperature weight — whichever end is worse at a given hour "
+                "counts, so temperature never scores twice."
+            ),
+        }),
+        ("Audit", {"fields": ("created_by",)}),
+    )
 
 
 @admin.register(ChangeLog)

@@ -24,6 +24,7 @@ class MapThresholdsModelTests(TestCase):
             "gust_caution": 15.0, "gust_cancel": 20.0,
             "precip_caution": 0.7, "precip_cancel": 2.0,
             "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
+            "temp_max_caution": 27.0, "temp_max_cancel": 32.0,
         })
 
     def test_load_is_idempotent(self):
@@ -141,14 +142,48 @@ class MapThresholdsAdminTests(TestCase):
                 "gust_caution": 12.0, "gust_cancel": 16.0,
                 "precip_caution": 0.5, "precip_cancel": 1.5,
                 "temp_min_caution": 3.0, "temp_min_cancel": 0.0,
+                "temp_max_caution": 25.0, "temp_max_cancel": 30.0,
             },
             follow=True,
         )
 
         obj = MapThresholds.load()
         self.assertEqual(obj.gust_cancel, 16.0)
+        self.assertEqual(obj.temp_max_cancel, 30.0)
         self.assertEqual(obj.updated_by, self.staff)
         self.assertContains(response, "until the grid is rebuilt")
+
+    def test_heat_can_be_switched_off_by_clearing_both_fields(self):
+        MapThresholds.load()
+        self.client.post(
+            reverse("admin:forecasts_mapthresholds_change", args=[1]),
+            {
+                "wind_mean_caution": 10.0, "wind_mean_cancel": 14.0,
+                "gust_caution": 15.0, "gust_cancel": 20.0,
+                "precip_caution": 0.7, "precip_cancel": 2.0,
+                "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
+                "temp_max_caution": "", "temp_max_cancel": "",
+            },
+        )
+
+        self.assertIsNone(MapThresholds.load().temp_max_caution)
+
+    def test_half_filled_heat_pair_is_rejected_by_the_form(self):
+        MapThresholds.load()
+        response = self.client.post(
+            reverse("admin:forecasts_mapthresholds_change", args=[1]),
+            {
+                "wind_mean_caution": 10.0, "wind_mean_cancel": 14.0,
+                "gust_caution": 15.0, "gust_cancel": 20.0,
+                "precip_caution": 0.7, "precip_cancel": 2.0,
+                "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
+                "temp_max_caution": 27.0, "temp_max_cancel": "",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Set both heat thresholds")
+        self.assertEqual(MapThresholds.load().temp_max_cancel, 32.0)
 
     def test_invalid_ordering_is_rejected_by_the_form(self):
         MapThresholds.load()
@@ -159,6 +194,7 @@ class MapThresholdsAdminTests(TestCase):
                 "gust_caution": 15.0, "gust_cancel": 12.0,
                 "precip_caution": 0.7, "precip_cancel": 2.0,
                 "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
+                "temp_max_caution": 27.0, "temp_max_cancel": 32.0,
             },
         )
 

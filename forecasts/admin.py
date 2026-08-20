@@ -49,11 +49,21 @@ class MapThresholdsAdmin(admin.ModelAdmin):
             "fields": ("precip_caution", "precip_cancel"),
             "description": "Millimetres per hour. Contributes 20%.",
         }),
-        ("Temperature", {
+        ("Temperature — cold", {
             "fields": ("temp_min_caution", "temp_min_cancel"),
             "description": (
-                "Degrees Celsius. Contributes 10%. Colder is worse here, so "
-                "cancel must be <em>lower</em> than caution."
+                "Degrees Celsius. Colder is worse, so cancel must be "
+                "<em>lower</em> than caution."
+            ),
+        }),
+        ("Temperature — heat", {
+            "fields": ("temp_max_caution", "temp_max_cancel"),
+            "description": (
+                "Degrees Celsius. Hotter is worse, so cancel must be "
+                "<em>higher</em> than caution. Leave both blank to ignore heat "
+                "entirely. Cold and heat share one 10% temperature weight — "
+                "whichever end is worse at a given hour is the one that counts, "
+                "so temperature never scores twice."
             ),
         }),
         ("Last change", {

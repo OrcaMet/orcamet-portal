@@ -424,8 +424,13 @@ class Command(BaseCommand):
             f"wind {thresholds['wind_mean_caution']}/{thresholds['wind_mean_cancel']}, "
             f"gust {thresholds['gust_caution']}/{thresholds['gust_cancel']}, "
             f"precip {thresholds['precip_caution']}/{thresholds['precip_cancel']}, "
-            f"temp {thresholds['temp_min_caution']}/{thresholds['temp_min_cancel']} "
-            "(caution/cancel — edit in Django admin)"
+            f"cold {thresholds['temp_min_caution']}/{thresholds['temp_min_cancel']}, "
+            + (
+                f"heat {thresholds['temp_max_caution']}/{thresholds['temp_max_cancel']} "
+                if thresholds.get("temp_max_caution") is not None
+                else "heat off "
+            )
+            + "(caution/cancel — edit in Django admin)"
         )
 
         # ==============================================================

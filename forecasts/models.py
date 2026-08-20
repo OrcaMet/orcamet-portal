@@ -199,8 +199,19 @@ class MapThresholds(models.Model):
     precip_caution = models.FloatField(default=0.7, help_text="Precipitation caution (mm/h)")
     precip_cancel = models.FloatField(default=2.0, help_text="Precipitation cancel (mm/h)")
 
-    temp_min_caution = models.FloatField(default=1.0, help_text="Temperature caution (°C)")
-    temp_min_cancel = models.FloatField(default=-2.0, help_text="Temperature cancel (°C)")
+    temp_min_caution = models.FloatField(default=1.0, help_text="Cold caution threshold (°C)")
+    temp_min_cancel = models.FloatField(default=-2.0, help_text="Cold cancel threshold (°C)")
+
+    # Nullable so heat scoring can be switched off entirely; blank means
+    # cold-only, exactly as the map behaved before heat existed.
+    temp_max_caution = models.FloatField(
+        default=27.0, null=True, blank=True,
+        help_text="Heat caution threshold (°C). Leave blank to ignore heat.",
+    )
+    temp_max_cancel = models.FloatField(
+        default=32.0, null=True, blank=True,
+        help_text="Heat cancel threshold (°C). Leave blank to ignore heat.",
+    )
 
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
@@ -223,6 +234,7 @@ class MapThresholds(models.Model):
         "gust_caution", "gust_cancel",
         "precip_caution", "precip_cancel",
         "temp_min_caution", "temp_min_cancel",
+        "temp_max_caution", "temp_max_cancel",
     )
 
     def save(self, *args, **kwargs):
@@ -266,8 +278,27 @@ class MapThresholds(models.Model):
         if self.temp_min_caution is not None and self.temp_min_cancel is not None:
             if self.temp_min_cancel >= self.temp_min_caution:
                 errors["temp_min_cancel"] = (
-                    "Cancel must be lower than caution — colder is worse "
+                    "Cold cancel must be lower than cold caution — colder is worse "
                     f"(caution is {self.temp_min_caution})."
+                )
+
+        # Both heat fields or neither: temperature_ramp() ignores a lone value,
+        # so a half-filled pair would silently do nothing.
+        if (self.temp_max_caution is None) != (self.temp_max_cancel is None):
+            errors["temp_max_cancel"] = (
+                "Set both heat thresholds, or leave both blank to ignore heat."
+            )
+        elif self.temp_max_caution is not None:
+            if self.temp_max_cancel <= self.temp_max_caution:
+                errors["temp_max_cancel"] = (
+                    "Heat cancel must be higher than heat caution — hotter is worse "
+                    f"(caution is {self.temp_max_caution})."
+                )
+            if (self.temp_min_caution is not None
+                    and self.temp_max_caution <= self.temp_min_caution):
+                errors["temp_max_caution"] = (
+                    "Heat caution must be warmer than cold caution "
+                    f"({self.temp_min_caution}°C), or the two ends overlap."
                 )
 
         if errors:

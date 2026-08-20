@@ -117,7 +117,7 @@ def site_detail(request, site_id):
     if threshold:
         thresholds_dict = threshold.as_dict()
     else:
-        thresholds_dict = {"wind_mean_caution": 10.0, "wind_mean_cancel": 14.0, "gust_caution": 15.0, "gust_cancel": 20.0, "precip_caution": 0.7, "precip_cancel": 2.0, "temp_min_caution": 1.0, "temp_min_cancel": -2.0}
+        thresholds_dict = {"wind_mean_caution": 10.0, "wind_mean_cancel": 14.0, "gust_caution": 15.0, "gust_cancel": 20.0, "precip_caution": 0.7, "precip_cancel": 2.0, "temp_min_caution": 1.0, "temp_min_cancel": -2.0, "temp_max_caution": 27.0, "temp_max_cancel": 32.0}
 
     hourly_qs = HourlyForecast.objects.filter(run__in=forecast_days).order_by("timestamp")
     hourly_list = [{"time": h.timestamp.isoformat(), "risk": h.hourly_risk, "wind_speed": h.wind_speed, "wind_gusts": h.wind_gusts, "precipitation": h.precipitation, "temperature": h.temperature} for h in hourly_qs]

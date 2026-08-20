@@ -8,6 +8,7 @@ ChangeLog: Audit trail for threshold and site changes.
 """
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -133,9 +134,21 @@ class ThresholdProfile(models.Model):
     precip_caution = models.FloatField(default=0.7, help_text="Precipitation caution (mm/h)")
     precip_cancel = models.FloatField(default=2.0, help_text="Precipitation cancel (mm/h)")
 
-    # Temperature thresholds (°C)
-    temp_min_caution = models.FloatField(default=1.0, help_text="Temperature caution (°C)")
-    temp_min_cancel = models.FloatField(default=-2.0, help_text="Temperature cancel (°C)")
+    # Temperature thresholds (°C) — cold end
+    temp_min_caution = models.FloatField(default=1.0, help_text="Cold caution threshold (°C)")
+    temp_min_cancel = models.FloatField(default=-2.0, help_text="Cold cancel threshold (°C)")
+
+    # Temperature thresholds (°C) — heat end.
+    # Nullable so heat scoring can be switched off for a site where it does
+    # not apply; blank means cold-only, exactly as before heat existed.
+    temp_max_caution = models.FloatField(
+        default=27.0, null=True, blank=True,
+        help_text="Heat caution threshold (°C). Leave blank to ignore heat for this site.",
+    )
+    temp_max_cancel = models.FloatField(
+        default=32.0, null=True, blank=True,
+        help_text="Heat cancel threshold (°C). Leave blank to ignore heat for this site.",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     created_by = models.ForeignKey(
@@ -161,7 +174,58 @@ class ThresholdProfile(models.Model):
             "precip_cancel": self.precip_cancel,
             "temp_min_caution": self.temp_min_caution,
             "temp_min_cancel": self.temp_min_cancel,
+            # None here means "no heat scoring" — temperature_ramp() treats a
+            # missing pair as cold-only.
+            "temp_max_caution": self.temp_max_caution,
+            "temp_max_cancel": self.temp_max_cancel,
         }
+
+    def clean(self):
+        """
+        Reject orderings the risk engine cannot interpret.
+
+        ramp() runs from the caution value to the cancel value, so cold cancel
+        must sit below cold caution, and heat cancel above heat caution.
+        Inverting either produces a flat ramp that keeps scoring, just wrong.
+        """
+        errors = {}
+
+        for name in ("wind_mean", "gust", "precip"):
+            caution = getattr(self, f"{name}_caution")
+            cancel = getattr(self, f"{name}_cancel")
+            if caution is not None and cancel is not None and cancel <= caution:
+                errors[f"{name}_cancel"] = (
+                    f"Cancel must be higher than caution (caution is {caution})."
+                )
+
+        if self.temp_min_caution is not None and self.temp_min_cancel is not None:
+            if self.temp_min_cancel >= self.temp_min_caution:
+                errors["temp_min_cancel"] = (
+                    "Cold cancel must be lower than cold caution "
+                    f"(caution is {self.temp_min_caution})."
+                )
+
+        # Both heat fields or neither: one alone is ignored by the engine, so
+        # a half-filled pair silently does nothing.
+        if (self.temp_max_caution is None) != (self.temp_max_cancel is None):
+            errors["temp_max_cancel"] = (
+                "Set both heat thresholds, or leave both blank to ignore heat."
+            )
+        elif self.temp_max_caution is not None:
+            if self.temp_max_cancel <= self.temp_max_caution:
+                errors["temp_max_cancel"] = (
+                    "Heat cancel must be higher than heat caution "
+                    f"(caution is {self.temp_max_caution})."
+                )
+            if (self.temp_min_caution is not None
+                    and self.temp_max_caution <= self.temp_min_caution):
+                errors["temp_max_caution"] = (
+                    "Heat caution must be warmer than cold caution "
+                    f"({self.temp_min_caution}°C), or the two ends overlap."
+                )
+
+        if errors:
+            raise ValidationError(errors)
 
 
 class ChangeLog(models.Model):
