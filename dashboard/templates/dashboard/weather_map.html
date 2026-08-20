@@ -134,7 +134,7 @@
     {% if data_age_hours and data_age_hours > 8 %}
     <div class="stale-banner">
         ⚠ Map data is {{ data_age_hours }} hours old
-        (last updated {{ last_grid_update|date:"D j M H:i" }} UTC).
+        (last updated {{ last_grid_update|date:"D j M H:i" }}).
         Forecasts may not reflect current conditions.
     </div>
     {% endif %}
@@ -197,6 +197,19 @@
 <script>
 (function(){
     'use strict';
+
+    // Site-local time, not the viewer's browser zone — someone checking a UK
+    // job from abroad must read the hours the crew will actually work.
+    var TZ = "{{ TIME_ZONE|escapejs }}";
+    var TIME_FMT = new Intl.DateTimeFormat('en-GB', {
+        timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    var DATE_FMT = new Intl.DateTimeFormat('en-GB', {
+        timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short',
+    });
+    var LONG_DATE_FMT = new Intl.DateTimeFormat('en-GB', {
+        timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+    });
 
     /* ================================================================
        CONFIG
@@ -461,8 +474,8 @@ function contourUrl(timestamp, varName) {
         var risk = cRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
         var r = recOf(risk);
         var d = new Date(ts);
-        var tm = d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0') + ' UTC';
-        var dt = d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'});
+        var tm = TIME_FMT.format(d);
+        var dt = DATE_FMT.format(d);
 
         return '<div class="pp-hd"><div><div class="pp-nm">' + esc(p.name) + '</div><div class="pp-sub">' + esc(p.client) + ' · ' + esc(p.postcode) + '</div></div>' +
             '<span class="pp-bg ' + bcls(r) + '">' + esc(r) + '</span></div>' +
@@ -571,8 +584,8 @@ function contourUrl(timestamp, varName) {
         var ts = gridTimestamps[curIdx];
         var d = new Date(ts);
 
-        $bdate.textContent = d.toLocaleDateString('en-GB', {weekday:'short', day:'numeric', month:'short', year:'numeric'});
-        $bhour.textContent = d.getUTCHours().toString().padStart(2,'0') + ':' + d.getUTCMinutes().toString().padStart(2,'0') + ' UTC';
+        $bdate.textContent = LONG_DATE_FMT.format(d);
+        $bhour.textContent = TIME_FMT.format(d);
         $bsub.textContent = 'Hour ' + (curIdx + 1) + '/' + gridTimestamps.length;
         $rng.value = curIdx;
 

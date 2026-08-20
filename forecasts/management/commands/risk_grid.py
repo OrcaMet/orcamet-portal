@@ -29,6 +29,7 @@ import numpy as np
 import requests  # for requests.exceptions.HTTPError in the retry path
 from django.core.management.base import BaseCommand, CommandError
 from django.conf import settings
+from django.utils import timezone as dj_timezone
 
 from forecasts.models import (
     UKRiskGridRun, UKRiskGridPoint, CachedContourImage, MapThresholds,
@@ -368,7 +369,9 @@ class Command(BaseCommand):
         ]
         total_points = len(grid_points)
 
-        today = datetime.now(timezone.utc).date()
+        # Local date, matching the per-site runner and the retention window
+        # in cleanup_forecasts. Both compare against forecast_date.
+        today = dj_timezone.localdate()
         end_date = today + timedelta(days=num_days - 1)
         start_str = today.strftime("%Y-%m-%d")
         end_str = end_date.strftime("%Y-%m-%d")

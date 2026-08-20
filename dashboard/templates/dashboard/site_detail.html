@@ -39,7 +39,7 @@
             {% elif run.recommendation == "CANCEL" %}
             <div class="status-badge status-cancel"><span class="status-text">CANCEL</span></div>
             {% endif %}
-            <div class="status-detail">Peak risk: {{ run.peak_risk|floatformat:0 }}% &middot; Updated {{ run.generated_at|date:"H:i d M" }} UTC</div>
+            <div class="status-detail">Peak risk: {{ run.peak_risk|floatformat:0 }}% &middot; Updated {{ run.generated_at|date:"H:i d M" }}</div>
             {% endwith %}
         </div>
         {% endif %}
@@ -140,7 +140,7 @@
             <table class="data-table hourly-table" id="hourly-table">
                 <thead>
                     <tr>
-                        <th>Time (UTC)</th>
+                        <th>Time</th>
                         <th>Wind (m/s)</th>
                         <th>Gust (m/s)</th>
                         <th>Precip (mm/h)</th>
@@ -205,7 +205,7 @@
     <div class="empty-state" style="margin-top: 2rem;">
         <h3>No Forecasts Available</h3>
         <p>Forecasts for this site have not been generated yet.</p>
-        <p>Forecasts run automatically at 06:00 and 14:00 UTC daily.</p>
+        <p>Forecasts refresh automatically every 6 hours.</p>
         {% if user.is_superadmin %}
         <p style="margin-top: 1rem;">
             <a href="/admin/sites/site/{{ site.pk }}/change/" class="btn btn-primary">Trigger from Admin</a>
@@ -229,6 +229,25 @@
 
     var WORK_START = 7;
     var WORK_END = 18;
+
+    // Server's zone, not the viewer's. A supervisor checking a UK job from
+    // another country must see the site's local hours, and the work window
+    // must be tested against those same hours.
+    var TZ = "{{ TIME_ZONE|escapejs }}";
+
+    var HOUR_FMT = new Intl.DateTimeFormat('en-GB', {
+        timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+    var DAY_FMT = new Intl.DateTimeFormat('en-GB', {
+        timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short',
+    });
+
+    /* Hour of day at the site, as a number, for the work-window test. */
+    function localHour(d) {
+        return parseInt(new Intl.DateTimeFormat('en-GB', {
+            timeZone: TZ, hour: 'numeric', hour12: false,
+        }).format(d), 10);
+    }
 
     var COLOURS = {
         risk:    { line: '#ef4444', fill: 'rgba(239,68,68,0.12)' },
@@ -275,9 +294,7 @@
             console.warn('OrcaMet: date adapter not available, using category labels');
             var labels = data.hourly.map(function(h) {
                 var d = new Date(h.time);
-                var day = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
-                var time = String(d.getUTCHours()).padStart(2, '0') + ':00';
-                return day + ' ' + time;
+                return DAY_FMT.format(d) + ' ' + HOUR_FMT.format(d);
             });
             buildRiskChart(labels, data.hourly, false);
             buildWindChart(labels, data.hourly, thresholds, false);
@@ -422,10 +439,10 @@
         for (var i = 0; i < hourly.length; i++) {
             var h = hourly[i];
             var d = new Date(h.time);
-            var hour = d.getUTCHours();
+            var hour = localHour(d);
             var isWork = (hour >= WORK_START && hour <= WORK_END);
-            var dayStr = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
-            var timeStr = String(hour).padStart(2, '0') + ':00';
+            var dayStr = DAY_FMT.format(d);
+            var timeStr = HOUR_FMT.format(d);
             var riskClass = 'risk-cell-low';
             if (h.risk >= 50) riskClass = 'risk-cell-high';
             else if (h.risk >= 20) riskClass = 'risk-cell-medium';

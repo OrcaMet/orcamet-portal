@@ -156,6 +156,10 @@ TEMPLATES = [
             "context_processors": [
                 "django.template.context_processors.debug",
                 "django.template.context_processors.request",
+                # Exposes TIME_ZONE so client-side date formatting can use the
+                # same zone as the server instead of assuming UTC, or the
+                # viewer's own zone when they are travelling.
+                "django.template.context_processors.tz",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
             ],
@@ -217,7 +221,15 @@ SANDBOX_MAX_SITES = int(os.environ.get("SANDBOX_MAX_SITES", "3"))
 # ============================================================
 
 LANGUAGE_CODE = "en-gb"
-TIME_ZONE = "UTC"
+
+# Local time for everyone who reads this portal. Timestamps are still stored
+# in UTC (USE_TZ) — this governs how they are interpreted and displayed.
+#
+# It matters beyond cosmetics: the work window below is applied to the hour
+# of day, so under UTC the 07:00-18:00 window silently ran an hour late for
+# the ~7 months of British Summer Time, scoring 08:00-19:00 local instead.
+TIME_ZONE = "Europe/London"
+
 USE_I18N = True
 USE_TZ = True
 
@@ -309,7 +321,8 @@ FORECAST_MAX_CONCURRENT_THREADS = int(
     os.environ.get("FORECAST_MAX_CONCURRENT_THREADS", "2")
 )
 
-# Work window for rope access operations (UTC)
+# Work window for rope access operations, in local time (see TIME_ZONE).
+# Inclusive of the end hour: 7..18 covers 07:00 up to 18:59.
 FORECAST_WORK_START_HOUR = 7
 FORECAST_WORK_END_HOUR = 18
 

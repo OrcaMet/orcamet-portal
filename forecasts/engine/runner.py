@@ -75,7 +75,10 @@ def run_forecast_for_site(site: Site) -> list:
             "temp_max_caution": 27.0, "temp_max_cancel": 32.0,
         }
 
-    today = datetime.now(timezone.utc).date()
+    # Local date, not UTC: a forecast "day" is the working day the crew
+    # recognises. Between midnight and 01:00 BST these differ, and a UTC
+    # date would have produced a run labelled with the previous day.
+    today = dj_timezone.localdate()
     end_date = today + timedelta(days=NUM_DAYS - 1)
 
     logger.info(
@@ -118,15 +121,22 @@ def run_forecast_for_site(site: Site) -> list:
         axis=1,
     )
 
-    # Split by date and create one ForecastRun per day
-    hourly_df["date"] = hourly_df["time"].dt.date
+    # Group days and apply the work window in LOCAL time. The API returns
+    # UTC, and using UTC hours directly meant the 07:00-18:00 window actually
+    # scored 08:00-19:00 local through British Summer Time — an hour of the
+    # real working morning was never assessed, and an hour after knock-off
+    # was. Timestamps stay UTC in the database; only the interpretation is
+    # local.
+    local_time = hourly_df["time"].dt.tz_convert(settings.TIME_ZONE)
+    hourly_df["date"] = local_time.dt.date
+    hourly_df["local_hour"] = local_time.dt.hour
     runs = []
 
     for forecast_date, day_data in hourly_df.groupby("date"):
         # Filter to work hours for summary stats
         work_hours = day_data[
-            (day_data["time"].dt.hour >= WORK_START) &
-            (day_data["time"].dt.hour <= WORK_END)
+            (day_data["local_hour"] >= WORK_START) &
+            (day_data["local_hour"] <= WORK_END)
         ]
 
         if work_hours.empty:
