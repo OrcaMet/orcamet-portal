@@ -232,9 +232,29 @@ STATICFILES_DIRS = [
     BASE_DIR / "orcamet_portal" / "static",
 ]
 
-if not DEBUG:
-    STATIC_ROOT = BASE_DIR / "staticfiles"
-    STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# STATICFILES_STORAGE was removed in Django 5.1 (deprecated in 4.2). This
+# project runs 5.2, so the old setting was being read by nobody: static files
+# were served by the plain StaticFilesStorage, without content-hashed names.
+# That meant no cache busting — browsers kept serving a stale portal.css
+# across deploys — and the brotli/gzip variants whitenoise[brotli] builds
+# were never used. Django does not warn about unknown settings, so this was
+# silent.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        # The manifest backend requires collectstatic to have run, which the
+        # build does but a dev checkout has not.
+        "BACKEND": (
+            "django.contrib.staticfiles.storage.StaticFilesStorage"
+            if DEBUG
+            else "whitenoise.storage.CompressedManifestStaticFilesStorage"
+        ),
+    },
+}
 
 
 # ============================================================

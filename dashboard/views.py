@@ -15,7 +15,7 @@ from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from forecasts.models import ForecastRun, HourlyForecast, UKRiskGridRun, UKRiskGridPoint, CachedContourImage
+from forecasts.models import ForecastRun, HourlyForecast, UKRiskGridRun, UKRiskGridPoint, CachedContourImage, MapThresholds
 from sites.models import Site
 
 
@@ -154,6 +154,13 @@ def weather_map(request):
         data_age_hours = round(delta.total_seconds() / 3600, 1)
 
     context = {"user": user, "data_age_hours": data_age_hours, "last_grid_update": last_grid_update, "go_count": recommendations.count("GO"), "caution_count": recommendations.count("CAUTION"), "cancel_count": recommendations.count("CANCEL")}
+
+    # The map scores the hourly site markers client-side, because the hourly
+    # values come from a JSON frame rather than a stored ForecastRun. It used
+    # to do that against thresholds hardcoded in the template, so editing them
+    # in the admin moved the contour layer but left the markers scoring
+    # against the old numbers — and heat never applied there at all.
+    context["map_thresholds"] = MapThresholds.load().as_dict()
 
     return render(request, "dashboard/weather_map.html", context)
 
