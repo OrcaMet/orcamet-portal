@@ -153,7 +153,13 @@ def callback_view(request):
             logger.warning(
                 f"Refusing invite signup for unverified address (sub={auth0_id})"
             )
-            request.session.pop(SESSION_KEY, None)
+            # Deliberately keep the code in the session. Auth0 sends its
+            # verification email but returns the user here immediately, so
+            # this branch is the normal path, not an edge case. Holding the
+            # code means that once they verify, an ordinary Login completes
+            # the signup — otherwise they would have to find the original
+            # invite link again, which most people will have lost by then.
+            # No weaker: email_verified is re-checked on that later request.
             return render(request, "accounts/verify_email.html", {
                 "email": email,
             }, status=403)

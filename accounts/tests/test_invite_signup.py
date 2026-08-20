@@ -206,6 +206,34 @@ class CallbackProvisioningTests(TestCase):
         invite.refresh_from_db()
         self.assertEqual(invite.uses, 0)
 
+    def test_invite_survives_so_signup_completes_after_verifying(self):
+        """
+        Auth0 returns the user here immediately after sign-up, before they
+        have clicked the verification email — so the refusal above is the
+        normal path. The held invite lets a plain login finish the job.
+        """
+        invite = make_invite()
+
+        self._callback(session_code=invite.code, email_verified=False)
+        self.assertEqual(User.objects.count(), 0)
+
+        # They verify, then log in again through the ordinary login button.
+        response = self._callback(email_verified=True)
+
+        self.assertRedirects(response, "/dashboard/", fetch_redirect_response=False)
+        user = User.objects.get()
+        self.assertTrue(user.is_sandbox_user)
+
+    def test_held_invite_still_refuses_an_unverified_retry(self):
+        """Holding the code must not let a second attempt skip the check."""
+        invite = make_invite()
+
+        self._callback(session_code=invite.code, email_verified=False)
+        response = self._callback(email_verified=False)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(User.objects.count(), 0)
+
     def test_forged_invite_code_in_session_is_refused(self):
         response = self._callback(session_code="made-up-code")
         self.assertContains(response, "Access Not Configured")

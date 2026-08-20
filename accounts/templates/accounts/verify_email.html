@@ -11,9 +11,10 @@
         has been confirmed.
     </p>
     <p>
-        Check your inbox for a verification message, click the link inside,
-        then open your invite link again.
+        Check your inbox for a verification message and click the link inside.
+        Then come back and log in — your invite is still held, so you won't
+        need the original signup link again.
     </p>
-    <a href="{% url 'accounts:index' %}" class="btn btn-primary">Return to Home</a>
+    <a href="{% url 'accounts:login' %}" class="btn btn-primary">Log In</a>
 </div>
 {% endblock %}
