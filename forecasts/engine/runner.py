@@ -21,10 +21,92 @@ from sites.models import Site, ThresholdProfile
 from .core import (
     fetch_ensemble,
     calculate_hourly_risk,
+    evaluate_thresholds,
     get_recommendation,
 )
+from . import ensemble as ens
 
 logger = logging.getLogger(__name__)
+
+# Ranked worst-first, so a day takes the worst verdict of any work hour.
+_VERDICT_RANK = {"GO": 0, "CAUTION": 1, "CANCEL": 2}
+
+
+def _day_verdict(work_hours, thresholds):
+    """
+    Worst hourly verdict across the work window, and what caused it.
+
+    Replaces get_recommendation(peak_risk): a breach at any hour stops the
+    day, and the weighted score could not represent a breach at all.
+    """
+    worst, limiting = "GO", ""
+
+    for _, row in work_hours.iterrows():
+        verdict, cause = evaluate_thresholds(
+            row["wind_speed"], row["wind_gusts"],
+            row["precipitation"], row["temperature"],
+            thresholds,
+        )
+        if _VERDICT_RANK[verdict] > _VERDICT_RANK[worst]:
+            worst, limiting = verdict, cause or ""
+
+    return worst, limiting
+
+
+def _percentiles_at(spreads, moment):
+    """
+    Ensemble percentiles for one timestamp, keyed by variable.
+
+    Matched on the instant rather than by position: the ensemble and the
+    deterministic fetch are separate requests and need not return the same
+    number of hours, so indexing one by the other's position would silently
+    pair up different times.
+    """
+    if not spreads:
+        return {}
+
+    key = moment.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M")
+    index = spreads["index"].get(key)
+    if index is None:
+        return {}
+
+    out = {}
+    for var, series in spreads["percentiles"].items():
+        if index < len(series) and series[index]:
+            out[var] = series[index]
+    return out
+
+
+def _fetch_cancellation_probabilities(site, thresholds):
+    """
+    Ensemble probabilities for this site, or None if unavailable.
+
+    Best-effort by design: the deterministic forecast is what the verdict
+    rests on, so an ensemble outage must degrade the extra information
+    rather than fail the run.
+    """
+    try:
+        times, members = ens.fetch_members(
+            site.latitude, site.longitude, forecast_days=NUM_DAYS,
+        )
+    except Exception as e:
+        logger.warning("No ensemble for %s: %s", site.name, e)
+        return None, None
+
+    try:
+        by_day = ens.cancellation_probability(times, members, thresholds)
+    except Exception:
+        logger.exception("Cancellation probability failed for %s", site.name)
+        return None, None
+
+    percentiles = {
+        var: ens.hourly_percentiles(times, members, var)
+        for var in ens.VARIABLES
+    }
+    return by_day, {
+        "index": {t: i for i, t in enumerate(times)},
+        "percentiles": percentiles,
+    }
 
 
 def _finite_or_zero(value) -> float:
@@ -132,6 +214,9 @@ def run_forecast_for_site(site: Site) -> list:
     hourly_df["local_hour"] = local_time.dt.hour
     runs = []
 
+    # Independent of the deterministic forecast above, and allowed to fail.
+    probabilities, spreads = _fetch_cancellation_probabilities(site, thresholds)
+
     for forecast_date, day_data in hourly_df.groupby("date"):
         # Filter to work hours for summary stats
         work_hours = day_data[
@@ -159,7 +244,13 @@ def run_forecast_for_site(site: Site) -> list:
         peak_gust = float(valid_hours["wind_gusts"].max())
         peak_precip = float(valid_hours["precipitation"].max())
         min_temp = float(valid_hours["temperature"].min())
-        recommendation = get_recommendation(peak_risk)
+        max_temp = float(valid_hours["temperature"].max())
+
+        # Hard gate, not the weighted score. peak_risk is still stored as a
+        # severity ranking within a band, but no longer decides the band.
+        recommendation, limiting_variable = _day_verdict(valid_hours, thresholds)
+
+        day_probs = (probabilities or {}).get(forecast_date) or {}
 
         # Build the hourly rows first so the whole day can be written in one
         # atomic block below.
@@ -203,6 +294,12 @@ def run_forecast_for_site(site: Site) -> list:
                 peak_gust=peak_gust,
                 peak_precip=peak_precip,
                 min_temp=min_temp,
+                max_temp=max_temp,
+                limiting_variable=limiting_variable,
+                p_cancel=day_probs.get("p_cancel"),
+                p_caution=day_probs.get("p_caution"),
+                p_cancel_by_variable=day_probs.get("by_variable") or {},
+                ensemble_members=day_probs.get("members"),
                 models_used=[m for m in models_used],
                 thresholds_snapshot=thresholds,
             )
@@ -211,6 +308,7 @@ def run_forecast_for_site(site: Site) -> list:
             hourly_records = [
                 HourlyForecast(
                     run=run,
+                    percentiles=_percentiles_at(spreads, row["time"]),
                     timestamp=row["time"],
                     wind_speed=float(row["wind_speed"]),
                     wind_gusts=float(row["wind_gusts"]),

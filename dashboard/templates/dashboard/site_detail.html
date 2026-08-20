@@ -39,7 +39,14 @@
             {% elif run.recommendation == "CANCEL" %}
             <div class="status-badge status-cancel"><span class="status-text">CANCEL</span></div>
             {% endif %}
-            <div class="status-detail">Peak risk: {{ run.peak_risk|floatformat:0 }}% &middot; Updated {{ run.generated_at|date:"H:i d M" }}</div>
+            <div class="status-detail">
+                {% if run.p_cancel_pct is not None %}
+                {{ run.p_cancel_pct }}% chance of cancellation
+                {% if run.ensemble_members %}<span class="cause-note">from {{ run.ensemble_members }} forecast scenarios</span>{% endif %}
+                &middot;
+                {% endif %}
+                Updated {{ run.generated_at|date:"H:i d M" }}
+            </div>
             {% endwith %}
         </div>
         {% endif %}
@@ -55,7 +62,7 @@
                     <tr>
                         <th class="col-day">Day</th>
                         <th class="col-verdict">Verdict</th>
-                        <th class="col-risk">Peak Risk</th>
+                        <th class="col-risk">Chance of cancellation</th>
                         <th class="col-num">Wind</th>
                         <th class="col-num">Gusts</th>
                         <th class="col-num">Precip</th>
@@ -82,19 +89,31 @@
                             {% else %}
                             <span class="badge badge-muted">Unknown</span>
                             {% endif %}
+                            {% if run.limiting_variable %}
+                            <span class="limiting">{{ run.limiting_variable }}</span>
+                            {% endif %}
                         </td>
                         <td class="col-risk">
                             {% comment %}
                             The bar makes the trend across days readable at a
                             glance, which a column of bare percentages is not.
+                            A null probability is not a zero — it means no
+                            ensemble was available, and must not read as safe.
                             {% endcomment %}
+                            {% if run.p_cancel is not None %}
                             <div class="risk-meter" role="img"
-                                 aria-label="Peak risk {{ run.peak_risk|floatformat:0 }} percent">
+                                 aria-label="{{ run.p_cancel|floatformat:2 }} chance of cancellation">
                                 <div class="risk-meter-track">
-                                    <div class="risk-meter-fill" style="width: {{ run.peak_risk|floatformat:0 }}%;"></div>
+                                    <div class="risk-meter-fill" style="width: {{ run.p_cancel_pct }}%;"></div>
                                 </div>
-                                <span class="risk-meter-value">{{ run.peak_risk|floatformat:0 }}%</span>
+                                <span class="risk-meter-value">{{ run.p_cancel_pct }}%</span>
                             </div>
+                            {% if run.p_cancel_causes %}
+                            <span class="cause-note">{{ run.p_cancel_causes }}</span>
+                            {% endif %}
+                            {% else %}
+                            <span class="cause-note">Not available</span>
+                            {% endif %}
                         </td>
                         <td class="col-num">{{ run.peak_wind|floatformat:1 }}<span class="unit">m/s</span></td>
                         <td class="col-num">{{ run.peak_gust|floatformat:1 }}<span class="unit">m/s</span></td>

@@ -208,6 +208,71 @@ def calculate_hourly_risk(wind: float, gust: float, precip: float, temp: float,
     return float(np.clip(prob * 100, 0.0, 100.0))
 
 
+# Order matters only for reporting: the first breach found at the worst
+# level is the one named as limiting.
+GATE_VARIABLES = (
+    ("gust", "gust_caution", "gust_cancel"),
+    ("wind", "wind_mean_caution", "wind_mean_cancel"),
+    ("precip", "precip_caution", "precip_cancel"),
+)
+
+
+def evaluate_thresholds(wind, gust, precip, temp, thresholds):
+    """
+    Hard-gate verdict for one hour: does anything breach a limit?
+
+    Returns (verdict, limiting_variable).
+
+    This replaces the weighted severity score for deciding GO / CAUTION /
+    CANCEL. The weighted form could not express a breach at all: gusts carry
+    0.40 on a scale centred at 0.45, so gusts alone topped out at 42.6% —
+    CAUTION — no matter how extreme, and rain or temperature alone never left
+    GO at any magnitude. A limit that cannot stop work is not a limit.
+
+    The severity score remains available for ranking hours within a band; it
+    is no longer what decides the band.
+    """
+    values = {"gust": gust, "wind": wind, "precip": precip}
+
+    worst = "GO"
+    limiting = None
+
+    for name, caution_key, cancel_key in GATE_VARIABLES:
+        value = values[name]
+        if value is None or not np.isfinite(value):
+            continue
+
+        cancel = thresholds.get(cancel_key)
+        if cancel is not None and value >= cancel:
+            # Cancel outranks anything already found; first one wins the name.
+            if worst != "CANCEL":
+                worst, limiting = "CANCEL", name
+            continue
+
+        caution = thresholds.get(caution_key)
+        if caution is not None and value >= caution and worst == "GO":
+            worst, limiting = "CAUTION", name
+
+    # Temperature is two-sided — too cold or too hot both stop work.
+    if temp is not None and np.isfinite(temp):
+        cold_cancel = thresholds.get("temp_min_cancel")
+        hot_cancel = thresholds.get("temp_max_cancel")
+        cold_caution = thresholds.get("temp_min_caution")
+        hot_caution = thresholds.get("temp_max_caution")
+
+        if (cold_cancel is not None and temp <= cold_cancel) or \
+                (hot_cancel is not None and temp >= hot_cancel):
+            if worst != "CANCEL":
+                worst, limiting = "CANCEL", "temperature"
+        elif worst == "GO" and (
+            (cold_caution is not None and temp <= cold_caution)
+            or (hot_caution is not None and temp >= hot_caution)
+        ):
+            worst, limiting = "CAUTION", "temperature"
+
+    return worst, limiting
+
+
 def get_recommendation(risk: float) -> str:
     """Convert risk score to recommendation string."""
     if np.isnan(risk):

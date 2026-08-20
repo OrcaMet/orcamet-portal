@@ -43,6 +43,42 @@ def _num(value):
     return value
 
 
+# Threshold keys as they should read to a human.
+_CAUSE_LABELS = {
+    "gust_cancel": "gusts",
+    "wind_mean_cancel": "wind",
+    "precip_cancel": "rain",
+    "temperature": "temperature",
+}
+
+
+def _annotate_cancellation(run):
+    """
+    Attach display-ready cancellation figures to a ForecastRun.
+
+    Kept out of the template because a probability needs rounding once, in
+    one place — and because a null must never be rendered as 0%, which would
+    read as "certainly fine" rather than "we do not know".
+    """
+    if run.p_cancel is None:
+        run.p_cancel_pct = None
+        run.p_cancel_causes = ""
+        return
+
+    run.p_cancel_pct = round(run.p_cancel * 100)
+
+    # Biggest contributor first — the reason someone would act.
+    causes = sorted(
+        (run.p_cancel_by_variable or {}).items(),
+        key=lambda kv: -kv[1],
+    )
+    run.p_cancel_causes = ", ".join(
+        f"{_CAUSE_LABELS.get(key, key)} {round(share * 100)}%"
+        for key, share in causes
+        if share > 0
+    )
+
+
 def _latest_runs_by_site(sites, success_only=True):
     """
     Return {site_id: most recent ForecastRun} for the given sites.
@@ -111,6 +147,9 @@ def site_detail(request, site_id):
 
     latest_ids = ForecastRun.objects.filter(site=site, status=ForecastRun.Status.SUCCESS, forecast_date__gte=today).values("forecast_date").annotate(latest_id=Max("id")).values_list("latest_id", flat=True)
     forecast_days = list(ForecastRun.objects.filter(id__in=latest_ids).order_by("forecast_date"))
+
+    for run in forecast_days:
+        _annotate_cancellation(run)
 
     threshold = site.thresholds.filter(is_active=True).first()
 

@@ -49,6 +49,38 @@ class ForecastRun(models.Model):
     peak_gust = models.FloatField(null=True, blank=True, help_text="Peak gust (m/s)")
     peak_precip = models.FloatField(null=True, blank=True, help_text="Peak precipitation (mm/h)")
     min_temp = models.FloatField(null=True, blank=True, help_text="Minimum temperature (°C)")
+    max_temp = models.FloatField(
+        null=True, blank=True,
+        help_text="Maximum temperature (°C). Needed since heat thresholds exist — "
+                  "without it a hot day's verdict has no visible explanation.",
+    )
+
+    # Which variable drove the verdict. The old weighted score could not
+    # express this: it produced one number with no attribution.
+    limiting_variable = models.CharField(
+        max_length=20, blank=True,
+        help_text="gust, wind, precip or temperature — whichever breached worst",
+    )
+
+    # Ensemble-derived likelihood that this job is called off. Null when no
+    # ensemble data was available for the run, which must stay distinct from
+    # a genuine zero.
+    p_cancel = models.FloatField(
+        null=True, blank=True,
+        help_text="Share of ensemble members breaching any cancel limit in the work window",
+    )
+    p_caution = models.FloatField(
+        null=True, blank=True,
+        help_text="Share of members breaching any caution limit",
+    )
+    p_cancel_by_variable = models.JSONField(
+        default=dict, blank=True,
+        help_text="Breakdown of p_cancel by the limit that was breached",
+    )
+    ensemble_members = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="How many members backed the probabilities (provenance)",
+    )
 
     # Models used in ensemble
     models_used = models.JSONField(default=list, help_text="List of weather model names used")
@@ -99,11 +131,18 @@ class HourlyForecast(models.Model):
     precipitation = models.FloatField(help_text="Ensemble mean precipitation (mm/h)")
     temperature = models.FloatField(help_text="Ensemble mean temperature (°C)")
 
-    # Model spread (uncertainty)
+    # Model spread (uncertainty). Superseded by `percentiles` below, which
+    # describes the distribution rather than summarising it — kept while the
+    # ensemble path beds in, then removed.
     wind_spread = models.FloatField(default=0.0)
     gust_spread = models.FloatField(default=0.0)
     precip_spread = models.FloatField(default=0.0)
     temp_spread = models.FloatField(default=0.0)
+
+    # {variable: {"p10": x, "p50": y, "p90": z}} from the ensemble members.
+    # Directly plottable as a plume band, and honest about skew — a standard
+    # deviation implies a symmetry precipitation does not have.
+    percentiles = models.JSONField(default=dict, blank=True)
 
     # Computed risk
     hourly_risk = models.FloatField(help_text="Risk score 0-100%")

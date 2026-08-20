@@ -574,6 +574,24 @@ a:hover { color: var(--teal); text-decoration: underline; }
     text-align: right;
 }
 
+/* What drove the verdict, and what drove the probability. Both are the
+   "why" behind a number, so they share a quiet, secondary treatment. */
+.limiting {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+
+.cause-note {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
 .model-count {
     font-size: 0.8rem;
     color: var(--text-secondary);
