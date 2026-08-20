@@ -191,14 +191,26 @@ a:hover { color: var(--teal); text-decoration: underline; }
     font-weight: 600;
     font-size: 0.95rem;
     cursor: pointer;
-    border: none;
+    /* A secondary look by default, so a bare .btn (Cancel, Edit Site) is
+       visible. .btn-primary and .btn-danger override these below. */
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
     transition: all 0.2s;
+    text-decoration: none;
+    font-family: inherit;
+}
+
+.btn:hover {
+    border-color: var(--surface-light);
+    color: var(--white);
     text-decoration: none;
 }
 
 .btn-primary {
     background: var(--teal);
     color: var(--white);
+    border-color: var(--teal);
 }
 
 .btn-primary:hover {
@@ -383,4 +395,362 @@ a:hover { color: var(--teal); text-decoration: underline; }
 .footer p {
     color: var(--text-secondary);
     font-size: 0.8rem;
+}
+
+/* ============================================================
+   SITE DETAIL PAGE
+   These classes were in the template but had no rules at all,
+   so the whole page rendered as an unstyled stack of text.
+   ============================================================ */
+
+/* --- Breadcrumb --- */
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+}
+
+.breadcrumb-sep { color: var(--border); }
+
+/* --- Site header --- */
+.site-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    align-items: flex-start;
+    justify-content: space-between;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.site-header-info { min-width: 0; }
+
+.site-header-info h1 {
+    font-size: 1.6rem;
+    color: var(--white);
+    line-height: 1.2;
+}
+
+.site-meta {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-top: 0.35rem;
+}
+
+.site-header-status {
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.status-badge {
+    display: inline-block;
+    padding: 0.5rem 1.25rem;
+    border-radius: var(--radius);
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    border: 1px solid transparent;
+}
+
+.status-go {
+    background: rgba(34, 197, 94, 0.15);
+    color: var(--green-go);
+    border-color: rgba(34, 197, 94, 0.4);
+}
+
+.status-caution {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--amber-caution);
+    border-color: rgba(245, 158, 11, 0.4);
+}
+
+.status-cancel {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--red-cancel);
+    border-color: rgba(239, 68, 68, 0.4);
+}
+
+.status-detail {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    margin-top: 0.5rem;
+}
+
+/* --- Daily outlook table --- */
+.table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+.forecast-table {
+    min-width: 720px;
+}
+
+.forecast-table td {
+    vertical-align: middle;
+}
+
+/* A left edge in the verdict colour: the row's status is then readable
+   without parsing the badge, and survives being skimmed at speed. */
+.forecast-row td:first-child {
+    border-left: 3px solid transparent;
+}
+
+.row-go td:first-child { border-left-color: var(--green-go); }
+.row-caution td:first-child { border-left-color: var(--amber-caution); }
+.row-cancel td:first-child { border-left-color: var(--red-cancel); }
+
+.row-today {
+    background: rgba(14, 165, 233, 0.06);
+}
+
+.forecast-table .col-day { white-space: nowrap; }
+
+.day-label {
+    display: block;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.row-today .day-label { color: var(--teal-bright); }
+
+.day-full-date {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.forecast-table .col-num {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+}
+
+.forecast-table th.col-num { text-align: right; }
+
+/* Units sit smaller and dimmer so the eye lands on the number, and the
+   decimal points still line up down the column. */
+.unit {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    margin-left: 0.3rem;
+}
+
+.risk-meter {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 130px;
+}
+
+.risk-meter-track {
+    flex: 1;
+    height: 6px;
+    background: var(--ocean-dark);
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.risk-meter-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--green-go);
+}
+
+.row-caution .risk-meter-fill { background: var(--amber-caution); }
+.row-cancel .risk-meter-fill { background: var(--red-cancel); }
+
+.risk-meter-value {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    min-width: 2.6rem;
+    text-align: right;
+}
+
+.model-count {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    border-bottom: 1px dotted var(--border);
+    cursor: help;
+}
+
+/* --- Chart tabs --- */
+.chart-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.chart-tab {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 0.45rem 1rem;
+    border-radius: var(--radius);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.chart-tab:hover {
+    color: var(--text-primary);
+    border-color: var(--surface-light);
+}
+
+.chart-tab.active {
+    background: var(--teal);
+    border-color: var(--teal);
+    color: var(--white);
+}
+
+.chart-container {
+    position: relative;
+    height: 340px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+}
+
+.section-hint {
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--text-secondary);
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+/* --- Hourly breakdown --- */
+.hourly-table { min-width: 640px; }
+
+.hourly-table td {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+}
+
+.hourly-table .work-hour { background: rgba(14, 165, 233, 0.07); }
+.hourly-table .off-hour { color: var(--text-secondary); }
+
+.loading-cell {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: 2rem;
+}
+
+/* --- Threshold panel --- */
+.threshold-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 0.75rem;
+}
+
+.threshold-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.9rem 1rem;
+}
+
+.threshold-var {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    margin-bottom: 0.4rem;
+}
+
+.threshold-vals {
+    display: flex;
+    gap: 1rem;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.threshold-caution { color: var(--amber-caution); }
+.threshold-cancel { color: var(--red-cancel); }
+
+/* --- Site form (sandbox self-service) --- */
+.site-form { max-width: 560px; }
+
+.form-row { margin-bottom: 1.1rem; }
+
+.form-row label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 0.35rem;
+}
+
+.form-row input[type="text"],
+.form-row input[type="number"],
+.form-row select,
+.form-row textarea {
+    width: 100%;
+    background: var(--ocean-dark);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-primary);
+    padding: 0.6rem 0.8rem;
+    font-size: 0.95rem;
+    font-family: inherit;
+}
+
+.form-row input:focus,
+.form-row select:focus,
+.form-row textarea:focus {
+    outline: none;
+    border-color: var(--teal);
+    box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.2);
+}
+
+.form-help {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-top: 0.3rem;
+}
+
+.form-error {
+    font-size: 0.8rem;
+    color: var(--red-cancel);
+    margin-top: 0.3rem;
+}
+
+.form-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 1.5rem;
+}
+
+.btn-danger {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--red-cancel);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.btn-danger:hover { background: rgba(239, 68, 68, 0.25); }
+
+/* --- Narrow screens --- */
+@media (max-width: 640px) {
+    .site-header {
+        flex-direction: column;
+        padding: 1.1rem;
+    }
+
+    .site-header-status { text-align: left; }
+
+    .chart-container { height: 260px; }
 }

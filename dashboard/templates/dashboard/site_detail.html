@@ -47,43 +47,69 @@
 
     {% if forecast_days %}
 
-    <div class="forecast-day-cards">
-        {% for run in forecast_days %}
-        <div class="day-card {% if run.recommendation == 'GO' %}day-go{% elif run.recommendation == 'CAUTION' %}day-caution{% else %}day-cancel{% endif %}">
-            <div class="day-card-date">
-                {% if run.forecast_date == today %}
-                <span class="day-label">Today</span>
-                {% else %}
-                <span class="day-label">{{ run.forecast_date|date:"l" }}</span>
-                {% endif %}
-                <span class="day-full-date">{{ run.forecast_date|date:"d M Y" }}</span>
-            </div>
-            <div class="day-card-recommendation">{{ run.recommendation }}</div>
-            <div class="day-card-stats">
-                <div class="day-stat">
-                    <span class="day-stat-label">Peak Risk</span>
-                    <span class="day-stat-value">{{ run.peak_risk|floatformat:0 }}%</span>
-                </div>
-                <div class="day-stat">
-                    <span class="day-stat-label">Wind</span>
-                    <span class="day-stat-value">{{ run.peak_wind|floatformat:1 }} m/s</span>
-                </div>
-                <div class="day-stat">
-                    <span class="day-stat-label">Gusts</span>
-                    <span class="day-stat-value">{{ run.peak_gust|floatformat:1 }} m/s</span>
-                </div>
-                <div class="day-stat">
-                    <span class="day-stat-label">Precip</span>
-                    <span class="day-stat-value">{{ run.peak_precip|floatformat:1 }} mm/h</span>
-                </div>
-                <div class="day-stat">
-                    <span class="day-stat-label">Min Temp</span>
-                    <span class="day-stat-value">{{ run.min_temp|floatformat:1 }}&deg;C</span>
-                </div>
-            </div>
-            <div class="day-card-models">Models: {{ run.models_used|join:", " }}</div>
+    <div class="section">
+        <h2>Daily Outlook</h2>
+        <div class="table-responsive">
+            <table class="data-table forecast-table">
+                <thead>
+                    <tr>
+                        <th class="col-day">Day</th>
+                        <th class="col-verdict">Verdict</th>
+                        <th class="col-risk">Peak Risk</th>
+                        <th class="col-num">Wind</th>
+                        <th class="col-num">Gusts</th>
+                        <th class="col-num">Precip</th>
+                        <th class="col-num">Min Temp</th>
+                        <th class="col-models">Models</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for run in forecast_days %}
+                    <tr class="forecast-row {% if run.recommendation == 'GO' %}row-go{% elif run.recommendation == 'CAUTION' %}row-caution{% else %}row-cancel{% endif %}{% if run.forecast_date == today %} row-today{% endif %}">
+                        <td class="col-day">
+                            <span class="day-label">
+                                {% if run.forecast_date == today %}Today{% else %}{{ run.forecast_date|date:"l" }}{% endif %}
+                            </span>
+                            <span class="day-full-date">{{ run.forecast_date|date:"d M Y" }}</span>
+                        </td>
+                        <td class="col-verdict">
+                            {% if run.recommendation == "GO" %}
+                            <span class="badge badge-active">GO</span>
+                            {% elif run.recommendation == "CAUTION" %}
+                            <span class="badge badge-caution">Caution</span>
+                            {% elif run.recommendation == "CANCEL" %}
+                            <span class="badge badge-cancel">Cancel</span>
+                            {% else %}
+                            <span class="badge badge-muted">Unknown</span>
+                            {% endif %}
+                        </td>
+                        <td class="col-risk">
+                            {% comment %}
+                            The bar makes the trend across days readable at a
+                            glance, which a column of bare percentages is not.
+                            {% endcomment %}
+                            <div class="risk-meter" role="img"
+                                 aria-label="Peak risk {{ run.peak_risk|floatformat:0 }} percent">
+                                <div class="risk-meter-track">
+                                    <div class="risk-meter-fill" style="width: {{ run.peak_risk|floatformat:0 }}%;"></div>
+                                </div>
+                                <span class="risk-meter-value">{{ run.peak_risk|floatformat:0 }}%</span>
+                            </div>
+                        </td>
+                        <td class="col-num">{{ run.peak_wind|floatformat:1 }}<span class="unit">m/s</span></td>
+                        <td class="col-num">{{ run.peak_gust|floatformat:1 }}<span class="unit">m/s</span></td>
+                        <td class="col-num">{{ run.peak_precip|floatformat:1 }}<span class="unit">mm/h</span></td>
+                        <td class="col-num">{{ run.min_temp|floatformat:1 }}<span class="unit">&deg;C</span></td>
+                        <td class="col-models">
+                            <span class="model-count" title="{{ run.models_used|join:', ' }}">
+                                {{ run.models_used|length }} model{{ run.models_used|length|pluralize }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
-        {% endfor %}
     </div>
 
     <div class="section">
