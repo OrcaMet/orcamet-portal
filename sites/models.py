@@ -100,14 +100,30 @@ class Site(models.Model):
             return (self.latitude, self.longitude)
         return None
 
-    def save(self, *args, **kwargs):
-        """Auto-geocode postcode on save if lat/lon not set."""
-        if self.postcode and (self.latitude is None or self.longitude is None):
-            lat, lon = geocode_postcode(self.postcode)
-            if lat is not None:
-                self.latitude = lat
-                self.longitude = lon
-        super().save(*args, **kwargs)
+    def geocode_if_needed(self) -> bool:
+        """
+        Fill in lat/lon from the postcode. Returns False if the lookup failed.
+
+        Deliberately not called from save(). It used to be, which put a
+        10-second-timeout HTTP call to postcodes.io inside every Site write —
+        holding a request or admin thread for the duration — and, on failure,
+        silently stored NULL coordinates, producing a site that never gets a
+        forecast with nothing to explain why. Callers that accept user input
+        geocode through their form instead, where a failure becomes a
+        validation error the user can act on.
+        """
+        if not self.postcode:
+            return False
+        if self.latitude is not None and self.longitude is not None:
+            return True
+
+        lat, lon = geocode_postcode(self.postcode)
+        if lat is None:
+            return False
+
+        self.latitude = lat
+        self.longitude = lon
+        return True
 
 
 class ThresholdProfile(models.Model):

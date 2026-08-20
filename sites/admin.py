@@ -1,10 +1,12 @@
 from django.contrib import admin, messages
+from .forms import SiteAdminForm
 from .models import Client, Site, ThresholdProfile, ChangeLog
 from .signals import queue_forecast_generation
 
 
 class SiteInline(admin.TabularInline):
     model = Site
+    form = SiteAdminForm
     extra = 0
     fields = ("name", "postcode", "latitude", "longitude", "exposure", "is_active", "job_complete")
     readonly_fields = ("latitude", "longitude")
@@ -24,6 +26,10 @@ class ClientAdmin(admin.ModelAdmin):
 
 @admin.register(Site)
 class SiteAdmin(admin.ModelAdmin):
+    # Geocodes during validation, so a bad postcode is a form error rather
+    # than a silently coordinate-less site. Site.save() no longer does it.
+    form = SiteAdminForm
+
     list_display = (
         "name", "client", "postcode", "latitude", "longitude",
         "exposure", "is_active", "job_complete", "latest_risk",

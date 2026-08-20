@@ -1,5 +1,9 @@
 """
-OrcaMet Portal — Site forms for the self-service (sandbox) views.
+OrcaMet Portal — Site forms.
+
+SiteForm backs the self-service (sandbox) views; SiteAdminForm backs the
+Django admin. Both geocode here rather than in Site.save(), so the network
+call happens where a failure can be reported to whoever typed the postcode.
 """
 
 from django import forms
@@ -7,7 +11,58 @@ from django import forms
 from .models import Site, geocode_postcode
 
 
-class SiteForm(forms.ModelForm):
+class GeocodedPostcodeMixin:
+    """
+    Resolve the postcode to coordinates during validation.
+
+    Site.save() no longer geocodes, so without this a site would be stored
+    with NULL coordinates and never get a forecast.
+    """
+
+    _geocoded = None
+
+    def clean_postcode(self):
+        postcode = (self.cleaned_data.get("postcode") or "").strip().upper()
+        if not postcode:
+            return postcode
+
+        # Unchanged postcode on an edit: the coordinates are already good, so
+        # don't spend a postcodes.io call re-confirming them.
+        if self.instance.pk and (self.instance.postcode or "").strip().upper() == postcode:
+            return postcode
+
+        lat, lon = geocode_postcode(postcode)
+        if lat is None:
+            raise forms.ValidationError(
+                "We couldn't find that UK postcode. Please check it and try again."
+            )
+
+        self._geocoded = (lat, lon)
+        return postcode
+
+    def _post_clean(self):
+        """
+        Apply the geocoded coordinates to the instance.
+
+        This has to happen here, not in clean_postcode: _post_clean rebuilds
+        the instance from cleaned_data, so anything written to the instance
+        during field cleaning is overwritten whenever latitude/longitude are
+        themselves form fields — silently storing a site with no coordinates.
+        """
+        super()._post_clean()
+        if self._geocoded is not None:
+            self.instance.latitude, self.instance.longitude = self._geocoded
+
+
+class SiteAdminForm(GeocodedPostcodeMixin, forms.ModelForm):
+    """Admin form for Site, with the same postcode validation as the portal."""
+
+    class Meta:
+        model = Site
+        fields = "__all__"
+
+
+class SiteForm(GeocodedPostcodeMixin, forms.ModelForm):
     """
     Create/edit form for a site owned by the logged-in user's client.
 
@@ -35,34 +90,6 @@ class SiteForm(forms.ModelForm):
     def __init__(self, *args, client=None, **kwargs):
         self.client = client
         super().__init__(*args, **kwargs)
-
-    def clean_postcode(self):
-        """
-        Reject a postcode we cannot geocode.
-
-        Site.save() geocodes silently and leaves lat/lon as None on failure,
-        which produces a site that never gets a forecast and gives the user no
-        clue why. Better to fail here, where we can say so.
-        """
-        postcode = (self.cleaned_data.get("postcode") or "").strip().upper()
-        if not postcode:
-            return postcode
-
-        # Unchanged postcode on an edit: the coordinates are already good, so
-        # don't spend a postcodes.io call re-confirming them.
-        if self.instance.pk and self.instance.postcode.strip().upper() == postcode:
-            return postcode
-
-        lat, lon = geocode_postcode(postcode)
-        if lat is None:
-            raise forms.ValidationError(
-                "We couldn't find that UK postcode. Please check it and try again."
-            )
-
-        # Stash the result so save() doesn't repeat the lookup.
-        self.instance.latitude = lat
-        self.instance.longitude = lon
-        return postcode
 
     def clean_name(self):
         """

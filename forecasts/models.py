@@ -69,6 +69,15 @@ class ForecastRun(models.Model):
         ordering = ["-generated_at"]
         # One forecast per site per date per run
         unique_together = ["site", "forecast_date", "generated_at"]
+        indexes = [
+            # The site detail page filters on exactly these three, and the
+            # unique_together index above leads with site/forecast_date so it
+            # cannot serve the status predicate.
+            models.Index(
+                fields=["site", "status", "forecast_date"],
+                name="forecasts_site_status_date_idx",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.site.name} — {self.forecast_date} — {self.get_status_display()}"
@@ -172,6 +181,41 @@ class CachedContourImage(models.Model):
         return f"{self.get_variable_display()} contour — {self.timestamp:%Y-%m-%d %H:%M}"
 
 
+class ForecastLock(models.Model):
+    """
+    A database-backed "this site is already being forecast" marker.
+
+    Deduplication used to be a module-level set in sites/signals.py, which
+    only ever worked in a single process. Production runs gunicorn with
+    WEB_CONCURRENCY=4, and the cron is a fifth process, so two of them could
+    start the same site at once and race on the delete-then-create in
+    run_forecast_for_site — the exact failure the set was added to prevent.
+
+    A row keyed by site is visible to every process. Uniqueness is the
+    primary key, so acquiring is one INSERT that either succeeds or raises
+    IntegrityError; no SELECT-then-INSERT window to lose.
+    """
+
+    site = models.OneToOneField(
+        "sites.Site",
+        on_delete=models.CASCADE,
+        primary_key=True,
+        related_name="forecast_lock",
+    )
+    acquired_at = models.DateTimeField(default=timezone.now)
+    holder = models.CharField(
+        max_length=120,
+        blank=True,
+        help_text="host:pid that took the lock, for diagnosing a stuck run",
+    )
+
+    class Meta:
+        verbose_name = "forecast lock"
+
+    def __str__(self):
+        return f"{self.site_id} locked by {self.holder or '?'} at {self.acquired_at:%H:%M}"
+
+
 class MapThresholds(models.Model):
     """
     The thresholds behind the UK map's Risk layer, editable in the admin.
@@ -248,7 +292,13 @@ class MapThresholds(models.Model):
 
     @classmethod
     def load(cls):
-        """Return the singleton, creating it with the defaults if absent."""
+        """
+        Return the singleton, creating it with the defaults if absent.
+
+        Concurrent first-hits are safe: get_or_create wraps its INSERT in its
+        own atomic block and re-runs the get() if it hits IntegrityError, so
+        the loser of the race reads what the winner wrote.
+        """
         obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 

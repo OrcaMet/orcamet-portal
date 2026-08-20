@@ -8,6 +8,7 @@ Runs in a background thread to avoid blocking the admin save.
 import logging
 import threading
 
+from django.conf import settings
 from django.db import connection, transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
@@ -16,16 +17,22 @@ from sites.models import Site
 
 logger = logging.getLogger(__name__)
 
-# Sites with a forecast thread already running. Repeated admin saves used to
-# start several threads for the same site, which then raced on the
-# delete-then-create in run_forecast_for_site and could leave a site with no
-# forecast at all. One in-flight run per site is enough.
-_inflight_lock = threading.Lock()
-_inflight_sites = set()
+# Cap on forecast threads running inside one web worker.
+#
+# Each run pulls four models from Open-Meteo and does numpy work, in a
+# gunicorn process on a 512 MB instance running WEB_CONCURRENCY=4. Trial
+# accounts can trigger this from the browser — a site per add, and again on
+# every edit — so without a ceiling a handful of testers could have a dozen
+# runs in flight per worker. Over the cap the inline run is skipped and the
+# scheduled cron picks the site up instead.
+MAX_CONCURRENT = getattr(settings, "FORECAST_MAX_CONCURRENT_THREADS", 2)
+_slots = threading.BoundedSemaphore(MAX_CONCURRENT)
 
 
 def _generate_forecast_background(site_id: int):
     """Run forecast generation in a background thread."""
+    from forecasts import locking
+
     try:
         # Import here to avoid circular imports
         from sites.models import Site
@@ -49,8 +56,9 @@ def _generate_forecast_background(site_id: int):
     except Exception as e:
         logger.error(f"Auto-forecast failed for site {site_id}: {e}", exc_info=True)
     finally:
-        with _inflight_lock:
-            _inflight_sites.discard(site_id)
+        # Release in this order: the lock is what other processes wait on.
+        locking.release(site_id)
+        _slots.release()
         # This thread opened its own DB connection; close it so it is not
         # left idle for conn_max_age after the thread exits.
         connection.close()
@@ -59,29 +67,45 @@ def _generate_forecast_background(site_id: int):
 def queue_forecast_generation(site_id: int, site_name: str = "") -> bool:
     """
     Start a background forecast run for this site unless one is already
-    in flight. Shared by the post_save signal below and the admin bulk
-    action (sites/admin.py) — both used to run their own separate thread
-    with no deduplication, so clicking "Generate forecasts" twice, or an
-    admin save landing while a signal-triggered run was still going,
-    could race on the delete-then-create in run_forecast_for_site.
+    running anywhere. Shared by the post_save signal below and the admin bulk
+    action (sites/admin.py).
 
-    Returns True if a run was started, False if one was already in flight.
+    Returns True if a run was started, False if it was skipped — either
+    because another process already holds the site's lock, or because this
+    worker is already at its thread ceiling.
     """
-    with _inflight_lock:
-        if site_id in _inflight_sites:
-            logger.info(
-                f"Forecast already running for {site_name or site_id} — "
-                f"not starting another"
-            )
-            return False
-        _inflight_sites.add(site_id)
+    from forecasts import locking
 
-    thread = threading.Thread(
-        target=_generate_forecast_background,
-        args=(site_id,),
-        daemon=True,
-    )
-    thread.start()
+    # Cross-process first: this is the guard that actually prevents two
+    # runs racing on the delete-then-create in run_forecast_for_site.
+    if not locking.acquire(site_id):
+        logger.info(
+            f"Forecast already running for {site_name or site_id} — "
+            f"not starting another"
+        )
+        return False
+
+    if not _slots.acquire(blocking=False):
+        logger.warning(
+            f"At the {MAX_CONCURRENT}-run ceiling for this worker — leaving "
+            f"{site_name or site_id} to the scheduled run"
+        )
+        locking.release(site_id)
+        return False
+
+    try:
+        thread = threading.Thread(
+            target=_generate_forecast_background,
+            args=(site_id,),
+            daemon=True,
+        )
+        thread.start()
+    except Exception:
+        # Nothing will reach the thread's finally, so undo both here.
+        _slots.release()
+        locking.release(site_id)
+        raise
+
     return True
 
 

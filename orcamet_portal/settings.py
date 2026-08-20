@@ -300,6 +300,15 @@ LOGGING = {
 
 OPENMETEO_API_KEY = os.environ.get("OPENMETEO_API_KEY", "")
 
+# How many forecast runs one web worker will do in the background at once.
+# Each fetches four models from Open-Meteo and does numpy work inside a
+# gunicorn process, and trial accounts can trigger runs from the browser, so
+# this is the ceiling that stops a handful of testers saturating a 512 MB
+# instance. Sites over the ceiling are left to the scheduled cron.
+FORECAST_MAX_CONCURRENT_THREADS = int(
+    os.environ.get("FORECAST_MAX_CONCURRENT_THREADS", "2")
+)
+
 # Work window for rope access operations (UTC)
 FORECAST_WORK_START_HOUR = 7
 FORECAST_WORK_END_HOUR = 18

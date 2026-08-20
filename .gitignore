@@ -8,7 +8,12 @@ venv/
 .venv/
 
 # Django
-db.sqlite3
+# Any local sqlite file, not just the default name — scratch databases get
+# created with all sorts of names while debugging and must never be committed.
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 staticfiles/
 media/
 

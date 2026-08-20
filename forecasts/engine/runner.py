@@ -231,18 +231,32 @@ def run_forecasts_all_active():
     Run forecasts for ALL active sites that are not job_complete.
     Used by the cron/management command.
     """
+    from forecasts.locking import site_forecast_lock
+
     active_sites = Site.objects.filter(is_active=True, job_complete=False)
     total = active_sites.count()
     logger.info(f"Running forecasts for {total} active sites")
 
     all_runs = []
+    skipped = 0
     for idx, site in enumerate(active_sites, 1):
         logger.info(f"[{idx}/{total}] {site.name}")
         try:
-            runs = run_forecast_for_site(site)
+            # The cron is a separate process from the web workers, so a site
+            # saved in the admin moments ago may still be mid-run. Without
+            # this the two would race on the delete-then-create below.
+            with site_forecast_lock(site.pk) as acquired:
+                if not acquired:
+                    logger.info(f"  ↷ Skipped {site.name} — already running elsewhere")
+                    skipped += 1
+                    continue
+                runs = run_forecast_for_site(site)
             all_runs.extend(runs)
         except Exception as e:
             logger.error(f"  ✗ Failed for {site.name}: {e}", exc_info=True)
+
+    if skipped:
+        logger.info(f"{skipped} site(s) skipped — a run was already in progress")
 
     success = sum(1 for r in all_runs if r.status == ForecastRun.Status.SUCCESS)
     failed = sum(1 for r in all_runs if r.status == ForecastRun.Status.FAILED)

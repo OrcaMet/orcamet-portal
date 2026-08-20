@@ -2,7 +2,7 @@ from django.contrib import admin, messages
 from django.http import HttpResponseRedirect
 from django.urls import reverse
 
-from .models import ForecastRun, HourlyForecast, MapThresholds
+from .models import ForecastLock, ForecastRun, HourlyForecast, MapThresholds
 
 
 class HourlyForecastInline(admin.TabularInline):
@@ -22,6 +22,27 @@ class ForecastRunAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "site__client", "forecast_date")
     inlines = [HourlyForecastInline]
+
+
+@admin.register(ForecastLock)
+class ForecastLockAdmin(admin.ModelAdmin):
+    """
+    Visibility into in-progress forecast runs.
+
+    Locks clear themselves — on completion, or after locking.STALE_AFTER if
+    the worker died mid-run. This exists so a stuck site can be freed
+    immediately rather than waiting out that window, and so "why is this site
+    not updating" has somewhere to look.
+    """
+
+    list_display = ("site", "acquired_at", "holder")
+    readonly_fields = ("site", "acquired_at", "holder")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(MapThresholds)
