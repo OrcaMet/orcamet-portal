@@ -192,6 +192,7 @@
 
 {% block extra_scripts %}
 {{ map_thresholds|json_script:"map-thresholds" }}
+{{ basemap_url|json_script:"basemap-url" }}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script>
@@ -310,7 +311,11 @@
         maxZoom: 14
     });
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    // Built server-side so the CARTO key comes from the environment rather
+    // than being hardcoded here. json_script keeps it correctly escaped.
+    var BASEMAP_URL = JSON.parse(document.getElementById('basemap-url').textContent);
+
+    L.tileLayer(BASEMAP_URL, {
         attribution: '&copy; OSM &copy; CARTO',
         subdomains: 'abcd',
         maxZoom: 20
