@@ -34,6 +34,15 @@ services:
         value: 4
       - key: PYTHON_VERSION
         value: "3.12.3"
+      # CARTO basemap key — set manually in the Render dashboard on THIS
+      # web service. Without it CARTO stamps every map tile with an
+      # "API KEY REQUIRED" watermark. It is served to the browser, so
+      # restrict it by domain in the CARTO dashboard rather than treating
+      # it as a secret. The cron services do not need it — only the web
+      # service renders the map page.
+      # - key: CARTO_API_KEY
+      #   value: your-carto-basemap-key
+
       # Auth0 — set these manually in the Render dashboard
       # after creating your Auth0 application
       # - key: AUTH0_DOMAIN

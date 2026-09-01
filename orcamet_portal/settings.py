@@ -312,6 +312,13 @@ LOGGING = {
 
 OPENMETEO_API_KEY = os.environ.get("OPENMETEO_API_KEY", "")
 
+# CARTO now watermarks unauthenticated basemap tiles with a diagonal
+# "API KEY REQUIRED" across every tile. The key is a client-side
+# credential by nature — it ships in the map page — so restrict it to the
+# portal's domains in the CARTO dashboard rather than treating it as a
+# secret. Without it the map still works, just watermarked.
+CARTO_API_KEY = os.environ.get("CARTO_API_KEY", "")
+
 # How many forecast runs one web worker will do in the background at once.
 # Each fetches four models from Open-Meteo and does numpy work inside a
 # gunicorn process, and trial accounts can trigger runs from the browser, so

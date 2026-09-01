@@ -7,6 +7,7 @@ The main views a logged-in user sees.
 import json
 import math
 from datetime import timedelta
+from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
@@ -78,6 +79,26 @@ def _annotate_cancellation(run):
         for key, share in causes
         if share > 0
     )
+
+
+# CARTO serves these tiles unauthenticated, but stamps every one with
+# "API KEY REQUIRED" until a key is supplied.
+CARTO_BASEMAP_TEMPLATE = (
+    "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+)
+
+
+def basemap_url():
+    """
+    The basemap tile URL, with the CARTO key appended when one is configured.
+
+    Falls back to the unauthenticated URL rather than breaking the map, so a
+    missing key costs a watermark and nothing else.
+    """
+    key = getattr(settings, "CARTO_API_KEY", "")
+    if not key:
+        return CARTO_BASEMAP_TEMPLATE
+    return f"{CARTO_BASEMAP_TEMPLATE}?api_key={quote(key, safe='')}"
 
 
 def _latest_runs_by_site(sites, success_only=True):
@@ -233,6 +254,7 @@ def weather_map(request):
     # in the admin moved the contour layer but left the markers scoring
     # against the old numbers — and heat never applied there at all.
     context["map_thresholds"] = MapThresholds.load().as_dict()
+    context["basemap_url"] = basemap_url()
 
     return render(request, "dashboard/weather_map.html", context)
 
