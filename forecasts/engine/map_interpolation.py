@@ -20,7 +20,7 @@ matplotlib.use("Agg")  # Non-interactive backend for server rendering
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from scipy.interpolate import CloughTocher2DInterpolator
-from scipy.spatial import Delaunay
+from scipy.spatial import Delaunay, cKDTree
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,21 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 INTERP_RESOLUTION = 200  # Default for overlays (lower = faster + less RAM)
+
+# How far the surface may be drawn from a real observation, as a multiple of
+# the grid's own median point spacing.
+#
+# A rate-limited run can leave whole latitude bands missing. Those voids sit
+# inside the convex hull, so the interpolator happily spans them — and
+# CloughTocher2D is a C1 *cubic*, unbounded by its inputs, fed unstable
+# gradients from the sliver triangles a long gap produces. A live run with a
+# 3 degree hole across Scotland rendered a saturated 100% chance of
+# cancellation between two edges that both read 42%.
+#
+# Beyond this distance the surface is blanked, so a gap reads as "no data"
+# rather than as a severe-weather signal. Expressed as a multiple of the
+# measured spacing so it adapts to --resolution automatically.
+MAX_GAP_FACTOR = 1.5
 
 # UK bounding box (matches risk_grid.py)
 UK_LAT_MIN = 49.9
@@ -60,9 +75,50 @@ VARIABLE_CMAPS = {
 # INTERPOLATION
 # ============================================================
 
-def interpolate_risk_surface(lats, lons, values, resolution=INTERP_RESOLUTION):
+def _median_point_spacing(points):
+    """
+    Median nearest-neighbour distance among the observations, in degrees.
+
+    Returns None when it cannot be measured (fewer than two distinct points).
+    """
+    if len(points) < 2:
+        return None
+
+    tree = cKDTree(points)
+    distances, _ = tree.query(points, k=2)   # k=2: the point itself, then its neighbour
+    nearest = distances[:, 1]
+    nearest = nearest[np.isfinite(nearest) & (nearest > 0)]
+
+    if nearest.size == 0:
+        return None
+    return float(np.median(nearest))
+
+
+def _blank_far_from_data(grid_lons, grid_lats, grid_values, points, max_distance):
+    """Set cells further than max_distance from any observation to NaN."""
+    tree = cKDTree(points)
+    distances, _ = tree.query(
+        np.column_stack([grid_lons.ravel(), grid_lats.ravel()])
+    )
+    too_far = distances.reshape(grid_values.shape) > max_distance
+
+    blanked = grid_values.copy()
+    blanked[too_far] = np.nan
+    return blanked
+
+
+def interpolate_risk_surface(lats, lons, values, resolution=INTERP_RESOLUTION,
+                             max_distance=None):
     """
     Interpolate scattered data onto a regular grid using CloughTocher2D.
+
+    The result is bounded by the observed values and blanked (NaN) wherever
+    it would be drawn further than max_distance from any observation, so a
+    gap in the input cannot be rendered as though it were measured.
+
+    max_distance defaults to MAX_GAP_FACTOR times the grid's own median point
+    spacing. Pass a value to override, or 0 to disable blanking entirely.
+
     Returns (grid_lons, grid_lats, grid_values) as 2D ndarrays.
     """
     valid = ~(np.isnan(lats) | np.isnan(lons) | np.isnan(values))
@@ -90,6 +146,28 @@ def interpolate_risk_surface(lats, lons, values, resolution=INTERP_RESOLUTION):
 
     grid_pts = np.column_stack([grid_lons.ravel(), grid_lats.ravel()])
     grid_values = interpolator(grid_pts).reshape(grid_lons.shape)
+
+    # Bound the surface by what was actually observed. Clipping later to the
+    # colour scale's own range would hide a cubic overshoot rather than
+    # prevent it — the overshoot would simply saturate at the top of the
+    # scale, which is the most alarming colour on it.
+    grid_values = np.clip(grid_values, float(values.min()), float(values.max()))
+
+    if max_distance is None:
+        spacing = _median_point_spacing(points)
+        max_distance = spacing * MAX_GAP_FACTOR if spacing else 0
+
+    if max_distance:
+        grid_values = _blank_far_from_data(
+            grid_lons, grid_lats, grid_values, points, max_distance
+        )
+        blanked = int(np.count_nonzero(np.isnan(grid_values)))
+        if blanked:
+            logger.info(
+                "Interpolation: blanked %d of %d cells further than %.2f deg "
+                "from any observation",
+                blanked, grid_values.size, max_distance,
+            )
 
     return grid_lons, grid_lats, grid_values
 
