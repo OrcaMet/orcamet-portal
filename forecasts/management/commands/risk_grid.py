@@ -78,6 +78,17 @@ DB_BATCH_SIZE = 5000
 BATCH_DELAY = 15.0
 RATE_LIMIT_WAIT = 75
 
+# Pacing adapts during a run. A fixed delay cannot recover once the limiter
+# bites: every later batch hits it too, exhausts its single retry and is
+# dropped. A live run lost every batch north of 55.9N that way and still
+# reported success, leaving Scotland missing from the map.
+BATCH_DELAY_MAX = 60.0
+BACKOFF_FACTOR = 1.5
+
+# Batches that are still rate limited after their retry are set aside and
+# swept once more at the end, after a cooldown, rather than left as a hole.
+RETRY_PASS_COOLDOWN = 120
+
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -556,15 +567,43 @@ class Command(BaseCommand):
             ("temperature_2m", acc_temp, wt_temp),
         )
 
-        n_batches = (total_points + batch_size - 1) // batch_size
+        batches = [
+            grid_points[i:i + batch_size]
+            for i in range(0, total_points, batch_size)
+        ]
+        n_batches = len(batches)
         self.stdout.write(
             f"\n  Fetching {ens.GRID_ENSEMBLE} "
             f"({total_points} pts, {n_batches} batches)..."
         )
 
-        for batch_idx in range(n_batches):
-            b_start = batch_idx * batch_size
-            batch_pts = grid_points[b_start:b_start + batch_size]
+        queue = list(batches)
+        deferred = []
+        retry_swept = False
+        batch_delay = BATCH_DELAY
+        processed = 0
+
+        while queue or (deferred and not retry_swept):
+            # Sweep whatever the limiter took once the main pass is done and
+            # the quota has had a chance to recover. Checked here rather than
+            # at the end of the body so a batch that fails and `continue`s
+            # cannot exit the loop with work still deferred.
+            if not queue:
+                retry_swept = True
+                self.stdout.write(self.style.WARNING(
+                    f"\n  {len(deferred)} batch(es) lost to rate limiting — "
+                    f"retrying after {RETRY_PASS_COOLDOWN}s"
+                ))
+                time.sleep(RETRY_PASS_COOLDOWN)
+                queue = deferred
+                deferred = []
+
+            batch_pts = queue.pop(0)
+            processed += 1
+            batch_label = (
+                f"retry {processed - n_batches}" if processed > n_batches
+                else f"{processed}/{n_batches}"
+            )
 
             try:
                 batch_times, per_point = ens.fetch_grid_members(
@@ -576,16 +615,21 @@ class Command(BaseCommand):
             except Exception as e:
                 if not _is_rate_limited(e):
                     self.stdout.write(self.style.ERROR(
-                        f"    Batch {batch_idx + 1}/{n_batches} failed: {e}"
+                        f"    Batch {batch_label} failed: {e}"
                     ))
                     total_pts_fail += len(batch_pts)
                     continue
 
+                # Slow the rest of the run down. Without this the limiter
+                # keeps biting and every later batch is lost the same way.
+                batch_delay = min(batch_delay * BACKOFF_FACTOR, BATCH_DELAY_MAX)
+
                 # Worth waiting out rather than dropping: the alternative is
                 # a hole in the map where the limiter happened to bite.
                 self.stdout.write(self.style.WARNING(
-                    f"    Rate limited on batch {batch_idx + 1}/{n_batches} — "
-                    f"waiting {RATE_LIMIT_WAIT}s"
+                    f"    Rate limited on batch {batch_label} — "
+                    f"waiting {RATE_LIMIT_WAIT}s "
+                    f"(pacing now {batch_delay:.0f}s)"
                 ))
                 time.sleep(RATE_LIMIT_WAIT)
                 try:
@@ -596,10 +640,17 @@ class Command(BaseCommand):
                     )
                     api_calls_made += 1
                 except Exception as retry_e:
-                    self.stdout.write(self.style.ERROR(
-                        f"    Retry failed: {retry_e}"
-                    ))
-                    total_pts_fail += len(batch_pts)
+                    if retry_swept:
+                        self.stdout.write(self.style.ERROR(
+                            f"    Retry failed: {retry_e}"
+                        ))
+                        total_pts_fail += len(batch_pts)
+                    else:
+                        self.stdout.write(self.style.WARNING(
+                            f"    Batch {batch_label} still limited — "
+                            f"deferred to the retry sweep"
+                        ))
+                        deferred.append(batch_pts)
                     continue
 
             # Every point must sit on the axis the accumulators were sized
@@ -607,7 +658,7 @@ class Command(BaseCommand):
             # hours, so drop it rather than misalign it.
             if batch_times != ref_times:
                 self.stdout.write(self.style.WARNING(
-                    f"    Batch {batch_idx + 1}/{n_batches} returned a different "
+                    f"    Batch {batch_label} returned a different "
                     f"time axis — skipped"
                 ))
                 total_pts_fail += len(batch_pts)
@@ -658,13 +709,13 @@ class Command(BaseCommand):
             del per_point
             gc.collect()
 
-            if (batch_idx + 1) % 5 == 0 or batch_idx == n_batches - 1:
+            if processed % 5 == 0 or not queue:
                 self.stdout.write(
-                    f"    Batch {batch_idx + 1}/{n_batches} complete "
+                    f"    Batch {batch_label} complete "
                     f"({total_pts_ok} OK, {total_pts_fail} failed)"
                 )
 
-            time.sleep(BATCH_DELAY)
+            time.sleep(batch_delay)
 
         if not total_pts_ok:
             grid_run.status = UKRiskGridRun.Status.FAILED
