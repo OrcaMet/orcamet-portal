@@ -28,7 +28,7 @@ class BasemapUrlTests(TestCase):
     def test_without_a_key_the_plain_url_is_used(self):
         """A missing key must cost a watermark, not a broken map."""
         self.assertEqual(basemap_url(), CARTO_BASEMAP_TEMPLATE)
-        self.assertNotIn("api_key", basemap_url())
+        self.assertNotIn("key=", basemap_url())
 
     @override_settings(CARTO_API_KEY="abc123")
     def test_with_a_key_it_is_appended(self):
@@ -36,7 +36,7 @@ class BasemapUrlTests(TestCase):
 
         self.assertTrue(url.startswith(CARTO_BASEMAP_TEMPLATE))
         self.assertEqual(
-            parse_qs(urlparse(url).query)["api_key"], ["abc123"]
+            parse_qs(urlparse(url).query)["key"], ["abc123"]
         )
 
     @override_settings(CARTO_API_KEY="abc123")
@@ -47,6 +47,21 @@ class BasemapUrlTests(TestCase):
         for token in ("{s}", "{z}", "{x}", "{y}", "{r}"):
             self.assertIn(token, url)
 
+    @override_settings(CARTO_API_KEY="abc123")
+    def test_the_parameter_is_named_key(self):
+        """
+        CARTO expects `key`, not `api_key`.
+
+        Verified against the live CDN: with `key` the tile is clean, while
+        api_key / apikey / token — and no parameter at all — all return a
+        byte-identical watermarked tile. Getting this wrong looks like it
+        works (valid 200 PNGs) while the watermark quietly stays.
+        """
+        query = parse_qs(urlparse(basemap_url()).query)
+
+        self.assertIn("key", query)
+        self.assertNotIn("api_key", query)
+
     @override_settings(CARTO_API_KEY="a b&c=d")
     def test_the_key_is_url_encoded(self):
         """A key with reserved characters must not corrupt the query string."""
@@ -54,7 +69,7 @@ class BasemapUrlTests(TestCase):
 
         self.assertNotIn("a b&c=d", url)
         self.assertEqual(
-            parse_qs(urlparse(url).query)["api_key"], ["a b&c=d"]
+            parse_qs(urlparse(url).query)["key"], ["a b&c=d"]
         )
 
 

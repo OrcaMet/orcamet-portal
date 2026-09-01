@@ -98,7 +98,10 @@ def basemap_url():
     key = getattr(settings, "CARTO_API_KEY", "")
     if not key:
         return CARTO_BASEMAP_TEMPLATE
-    return f"{CARTO_BASEMAP_TEMPLATE}?api_key={quote(key, safe='')}"
+    # CARTO's parameter is `key`. Verified empirically against the live CDN:
+    # with `key` the tile comes back clean, while api_key/apikey/token — and
+    # no parameter at all — return a byte-identical watermarked tile.
+    return f"{CARTO_BASEMAP_TEMPLATE}?key={quote(key, safe='')}"
 
 
 def _latest_runs_by_site(sites, success_only=True):
