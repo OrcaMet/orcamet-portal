@@ -34,14 +34,18 @@ services:
         value: 4
       - key: PYTHON_VERSION
         value: "3.12.3"
-      # CARTO basemap key — set manually in the Render dashboard on THIS
-      # web service. Without it CARTO stamps every map tile with an
-      # "API KEY REQUIRED" watermark. It is served to the browser, so
-      # restrict it by domain in the CARTO dashboard rather than treating
-      # it as a secret. The cron services do not need it — only the web
-      # service renders the map page.
-      # - key: CARTO_API_KEY
-      #   value: your-carto-basemap-key
+      # CARTO basemap key. Without it CARTO stamps every map tile with an
+      # "API KEY REQUIRED" watermark.
+      #
+      # sync: false means "this service uses this variable, but its value is
+      # managed in the Render dashboard". Declaring it keeps a Blueprint sync
+      # from removing the dashboard value, without the key ever entering git.
+      # It is served to the browser with the map page, so restrict it by
+      # domain in the CARTO dashboard rather than treating it as a secret.
+      #
+      # Only the web service needs it — the crons never render the map.
+      - key: CARTO_API_KEY
+        sync: false
 
       # Auth0 — set these manually in the Render dashboard
       # after creating your Auth0 application
