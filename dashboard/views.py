@@ -6,6 +6,7 @@ The main views a logged-in user sees.
 
 import json
 import math
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
@@ -95,6 +96,38 @@ def _latest_runs_by_site(sites, success_only=True):
     for run in runs.order_by("site_id", "-generated_at"):
         latest.setdefault(run.site_id, run)
     return latest
+
+
+def _timeline_runs(sites, days=None):
+    """
+    Latest successful run per (site, forecast_date) from today onward.
+
+    The map timeline spans the grid's full horizon (72 hours by default), but
+    a single ForecastRun only covers one day. Using just the newest run meant
+    the hourly frames ran out after 24 hours, and the markers silently fell
+    back to a peak-of-day summary for the rest of the timeline — the contour
+    kept advancing hour by hour while the pins showed a different metric,
+    with nothing on screen saying so.
+    """
+    if days is None:
+        days = getattr(settings, "FORECAST_NUM_DAYS", 3)
+
+    today = timezone.localdate()
+
+    latest_ids = (
+        ForecastRun.objects
+        .filter(
+            site__in=sites,
+            status=ForecastRun.Status.SUCCESS,
+            forecast_date__gte=today,
+            forecast_date__lt=today + timedelta(days=days),
+        )
+        .values("site_id", "forecast_date")
+        .annotate(latest_id=Max("id"))
+        .values_list("latest_id", flat=True)
+    )
+
+    return list(ForecastRun.objects.filter(id__in=latest_ids).order_by("forecast_date"))
 
 
 @login_required(login_url="/login/")
@@ -254,30 +287,36 @@ def map_sites_hourly_json(request):
     sites_qs = _visible_sites(user)
 
     sites_list = [s for s in sites_qs if s.coords is not None]
-    latest_runs = _latest_runs_by_site(sites_list)
 
-    runs_by_id = {}
-    for site in sites_list:
-        run = latest_runs.get(site.id)
-        if run:
-            runs_by_id[run.id] = site
+    # Every upcoming day's run, so the frames cover the same horizon as the
+    # contour timeline rather than stopping after the first day.
+    runs = _timeline_runs(sites_list)
+    sites_by_id = {s.id: s for s in sites_list}
 
     # One query for every run's hourly data instead of one per site.
-    hours_by_run = {run_id: [] for run_id in runs_by_id}
-    if runs_by_id:
+    hours_by_run = {run.id: [] for run in runs}
+    if runs:
         for hour in HourlyForecast.objects.filter(
-            run_id__in=runs_by_id
+            run_id__in=hours_by_run
         ).order_by("timestamp"):
             hours_by_run[hour.run_id].append(hour)
+
+    # A site can have several runs (one per day); merge them into one series.
+    hours_by_site = {}
+    for run in runs:
+        site = sites_by_id.get(run.site_id)
+        if site is None:
+            continue
+        hours_by_site.setdefault(site.id, []).extend(hours_by_run.get(run.id, []))
 
     site_hours = []
     timestamps_set = set()
 
-    for run_id, site in runs_by_id.items():
-        hours = hours_by_run.get(run_id, [])[:48]
+    for site_id, hours in hours_by_site.items():
         if not hours:
             continue
-        site_hours.append((site, hours))
+        hours.sort(key=lambda h: h.timestamp)
+        site_hours.append((sites_by_id[site_id], hours))
         for h in hours:
             timestamps_set.add(h.timestamp)
 

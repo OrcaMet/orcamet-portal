@@ -738,6 +738,27 @@ function contourUrl(timestamp, varName) {
         $hovertip.style.display = 'none';
     });
 
+    /* Zoom to the visible sites. Called from every boot path — the success
+       path, the safety timeout and the error handler — because a slow or
+       failed contour load used to leave the map on the default UK-wide view
+       with the client's sites as specks. */
+    var hasFittedToSites = false;
+
+    function fitToSites() {
+        if (hasFittedToSites) return;
+        if (!siteGJ || !siteGJ.features || !siteGJ.features.length) return;
+
+        var la = siteGJ.features.map(function(f) { return f.geometry.coordinates[1]; });
+        var lo = siteGJ.features.map(function(f) { return f.geometry.coordinates[0]; });
+
+        map.fitBounds([
+            [Math.min.apply(null, la) - 0.8, Math.min.apply(null, lo) - 0.8],
+            [Math.max.apply(null, la) + 0.8, Math.max.apply(null, lo) + 0.8]
+        ], {maxZoom: 9});
+
+        hasFittedToSites = true;
+    }
+
     function dismissLoading() {
         document.getElementById('mfill').style.width = '100%';
         document.getElementById('mload').classList.add('done');
@@ -759,6 +780,7 @@ function contourUrl(timestamp, varName) {
         } else {
             renderSites(0);
         }
+        fitToSites();
         dismissLoading();
     }, 20000);
 
@@ -793,14 +815,7 @@ function contourUrl(timestamp, varName) {
             preloadAllFrames(curVar);
         }
 
-        if (siteGJ && siteGJ.features && siteGJ.features.length) {
-            var la = siteGJ.features.map(function(f) { return f.geometry.coordinates[1]; });
-            var lo = siteGJ.features.map(function(f) { return f.geometry.coordinates[0]; });
-            map.fitBounds([
-                [Math.min.apply(null, la) - 0.8, Math.min.apply(null, lo) - 0.8],
-                [Math.max.apply(null, la) + 0.8, Math.max.apply(null, lo) + 0.8]
-            ], {maxZoom: 9});
-        }
+        fitToSites();
 
         dismissLoading();
     }).catch(function(e) {
@@ -808,12 +823,17 @@ function contourUrl(timestamp, varName) {
         clearTimeout(bootTimeout);
         document.getElementById('gstatus').textContent = 'Map loaded (contour unavailable)';
         renderSites(0);
+        fitToSites();
         dismissLoading();
     });
 
+    /* Refresh the site data periodically. The fetches alone are not enough —
+       without re-rendering, new verdicts sat in memory until the user moved
+       the slider, so a long-open map showed stale pins while looking live. */
     setInterval(function() {
-        loadSites();
-        loadHourly();
+        Promise.all([loadSites(), loadHourly()]).then(function() {
+            renderSites(curIdx);
+        });
     }, 300000);
 
 })();
