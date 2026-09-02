@@ -22,11 +22,27 @@ from datetime import datetime, timezone
 import numpy as np
 from django.conf import settings
 
-from .core import _session
+from .core import _session, customer_url, scrub_key
 
 logger = logging.getLogger(__name__)
 
 ENSEMBLE_HOST = "https://ensemble-api.open-meteo.com/v1/ensemble"
+
+
+def _api_key():
+    return getattr(settings, "OPENMETEO_API_KEY", "")
+
+
+def ensemble_url():
+    """
+    The endpoint actually used, customer host included when a key is set.
+
+    The grid is by far the heaviest caller here — 51 members across four
+    variables for every point — so it is the first thing the free tier's
+    limiter refuses. It has to go out authenticated.
+    """
+    return customer_url(ENSEMBLE_HOST)
+
 
 # Member counts verified against the live API: ECMWF 51, ICON 40, GFS 31.
 # Pooled, they give a distribution wide enough to read probabilities off.
@@ -71,25 +87,31 @@ def fetch_members(lat, lon, forecast_days=3, models=ENSEMBLE_MODELS):
     members = []
 
     for model in models:
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": HOURLY_VARS,
+            "models": model,
+            "wind_speed_unit": "ms",
+            "precipitation_unit": "mm",
+            "timezone": "UTC",
+            "forecast_days": forecast_days,
+        }
+        api_key = _api_key()
+        if api_key:
+            params["apikey"] = api_key
+
         try:
             resp = _session.get(
-                ENSEMBLE_HOST,
-                params={
-                    "latitude": lat,
-                    "longitude": lon,
-                    "hourly": HOURLY_VARS,
-                    "models": model,
-                    "wind_speed_unit": "ms",
-                    "precipitation_unit": "mm",
-                    "timezone": "UTC",
-                    "forecast_days": forecast_days,
-                },
-                timeout=REQUEST_TIMEOUT,
+                ensemble_url(), params=params, timeout=REQUEST_TIMEOUT
             )
             resp.raise_for_status()
             hourly = resp.json().get("hourly", {})
         except Exception as e:
-            logger.warning("Ensemble %s failed at (%.3f, %.3f): %s", model, lat, lon, e)
+            logger.warning(
+                "Ensemble %s failed at (%.3f, %.3f): %s",
+                model, lat, lon, scrub_key(e),
+            )
             continue
 
         model_times = hourly.get("time")
@@ -158,20 +180,21 @@ def fetch_grid_members(lats, lons, forecast_days=2, model=GRID_ENSEMBLE):
     requested coordinates; each entry is a list of member dicts, or None if
     that location came back unusable.
     """
-    resp = _session.get(
-        ENSEMBLE_HOST,
-        params={
-            "latitude": ",".join(f"{v:.4f}" for v in lats),
-            "longitude": ",".join(f"{v:.4f}" for v in lons),
-            "hourly": HOURLY_VARS,
-            "models": model,
-            "wind_speed_unit": "ms",
-            "precipitation_unit": "mm",
-            "timezone": "UTC",
-            "forecast_days": forecast_days,
-        },
-        timeout=REQUEST_TIMEOUT,
-    )
+    params = {
+        "latitude": ",".join(f"{v:.4f}" for v in lats),
+        "longitude": ",".join(f"{v:.4f}" for v in lons),
+        "hourly": HOURLY_VARS,
+        "models": model,
+        "wind_speed_unit": "ms",
+        "precipitation_unit": "mm",
+        "timezone": "UTC",
+        "forecast_days": forecast_days,
+    }
+    api_key = _api_key()
+    if api_key:
+        params["apikey"] = api_key
+
+    resp = _session.get(ensemble_url(), params=params, timeout=REQUEST_TIMEOUT)
     resp.raise_for_status()
     payload = resp.json()
 

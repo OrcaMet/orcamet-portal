@@ -8,8 +8,10 @@ with geographic-aware weighting, and computes hourly risk scores.
 
 import logging
 import math
+import re
 import time
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 import pandas as pd
@@ -43,6 +45,52 @@ _session = _build_session()
 # Base host for the Open-Meteo API (used for logging/diagnostics by the
 # grid management command).
 OPENMETEO_HOST = "https://api.open-meteo.com"
+
+# A paid key is served from a different host. Open-Meteo's docs: "The server
+# URL requires the prefix customer-."
+#
+# Sending the key to the free host does not fail — it is simply ignored, and
+# the request is served as anonymous traffic on free-tier limits. That is how
+# this hid: risk_grid printed "API key: ****abcd" on every run while all 38
+# of its ensemble calls were being rate limited as though no key existed,
+# losing every grid point north of 55.9N.
+CUSTOMER_PREFIX = "customer-"
+
+
+def customer_url(url, api_key=None):
+    """
+    Rewrite an Open-Meteo URL onto the customer host when a key is set.
+
+    Without a key the free host is returned unchanged, so an unkeyed
+    deployment keeps working exactly as before.
+    """
+    if api_key is None:
+        api_key = getattr(settings, "OPENMETEO_API_KEY", "")
+    if not api_key:
+        return url
+
+    parts = urlsplit(url)
+    if parts.netloc.startswith(CUSTOMER_PREFIX):
+        return url
+    return urlunsplit(parts._replace(netloc=CUSTOMER_PREFIX + parts.netloc))
+
+
+def openmeteo_host():
+    """The base host actually in use, for diagnostics."""
+    return customer_url(OPENMETEO_HOST)
+
+
+# requests puts the full request URL into its exception text, and the key
+# now rides in the query string. Untouched, a single 429 would print the
+# credential into the Render logs and, for the grid, persist it in
+# UKRiskGridRun.error_message.
+_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
+
+
+def scrub_key(text):
+    """Redact the API key from anything about to be logged or stored."""
+    return _APIKEY_RE.sub(lambda m: m.group(1) + "***", str(text))
+
 
 # ============================================================
 # MULTI-MODEL CONFIGURATION
@@ -310,7 +358,9 @@ def fetch_single_model(model_name: str, lat: float, lon: float,
     if api_key:
         params["apikey"] = api_key
 
-    resp = _session.get(config["url"], params=params, timeout=30)
+    resp = _session.get(
+        customer_url(config["url"], api_key), params=params, timeout=30
+    )
     resp.raise_for_status()
     j = resp.json()
 
@@ -350,7 +400,9 @@ def fetch_ensemble(lat: float, lon: float, exposure: str,
             successful_models.append(model_name)
             logger.debug(f"  ✓ {MODELS_CONFIG[model_name]['name']}")
         except Exception as e:
-            logger.warning(f"  ✗ {MODELS_CONFIG[model_name]['name']}: {e}")
+            logger.warning(
+                f"  ✗ {MODELS_CONFIG[model_name]['name']}: {scrub_key(e)}"
+            )
 
         # Be polite to the API
         time.sleep(0.15)
