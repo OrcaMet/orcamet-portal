@@ -89,6 +89,18 @@ BACKOFF_FACTOR = 1.5
 # swept once more at the end, after a cooldown, rather than left as a hole.
 RETRY_PASS_COOLDOWN = 120
 
+# The probe is a single call the entire run depends on: it establishes the
+# timestamp axis every accumulator is sized against, so there is no partial
+# result to fall back on when it fails. Batches already wait the limiter out
+# and the probe did not — one transient 429 threw the whole run away before it
+# fetched a single point. A live run failed twelve seconds in that way, on a
+# quota a previous run had just spent.
+PROBE_ATTEMPTS = 4
+
+# Non-rate-limit failures (a dropped connection, a blip at the endpoint) are
+# worth a shorter pause than the limiter needs.
+PROBE_RETRY_WAIT = 30.0
+
 
 # ============================================================
 # HELPER FUNCTIONS
@@ -492,17 +504,46 @@ class Command(BaseCommand):
             f"\n  Probing {ens.GRID_ENSEMBLE} for timestamp axis..."
         )
 
-        try:
-            ref_times, probe_points = ens.fetch_grid_members(
-                [grid_points[0][0]], [grid_points[0][1]],
-                forecast_days=num_days,
-            )
-            time.sleep(1.0)
-        except Exception as e:
+        ref_times, probe_points = None, None
+        probe_error = None
+
+        for attempt in range(1, PROBE_ATTEMPTS + 1):
+            try:
+                ref_times, probe_points = ens.fetch_grid_members(
+                    [grid_points[0][0]], [grid_points[0][1]],
+                    forecast_days=num_days,
+                )
+                time.sleep(1.0)
+                probe_error = None
+                break
+            except Exception as e:
+                probe_error = e
+                if attempt == PROBE_ATTEMPTS:
+                    break
+
+                # Escalate for the limiter the way the batch loop does; a
+                # dropped connection just needs a moment.
+                if _is_rate_limited(e):
+                    wait = RATE_LIMIT_WAIT * BACKOFF_FACTOR ** (attempt - 1)
+                    reason = "rate limited"
+                else:
+                    wait = PROBE_RETRY_WAIT
+                    reason = type(e).__name__
+
+                self.stdout.write(self.style.WARNING(
+                    f"  Probe attempt {attempt}/{PROBE_ATTEMPTS} failed "
+                    f"({reason}) - waiting {wait:.0f}s"
+                ))
+                time.sleep(wait)
+
+        if probe_error is not None:
             grid_run.status = UKRiskGridRun.Status.FAILED
-            grid_run.error_message = f"Probe failed: {e}"
+            grid_run.error_message = f"Probe failed: {probe_error}"
             grid_run.save()
-            raise CommandError(f"Ensemble probe failed: {e}")
+            raise CommandError(
+                f"Ensemble probe failed after {PROBE_ATTEMPTS} attempts: "
+                f"{probe_error}"
+            )
 
         if not ref_times or not probe_points or probe_points[0] is None:
             grid_run.status = UKRiskGridRun.Status.FAILED
