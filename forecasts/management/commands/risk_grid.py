@@ -40,7 +40,7 @@ from forecasts.models import (
 from forecasts.engine.core import (
     calculate_hourly_risk,
     MODELS_CONFIG,
-    OPENMETEO_HOST,
+    scrub_key,
     _session,
 )
 from forecasts.engine import ensemble as ens
@@ -281,9 +281,9 @@ class Command(BaseCommand):
             logger.exception("Unexpected error in risk_grid")
             if grid_run:
                 grid_run.status = UKRiskGridRun.Status.FAILED
-                grid_run.error_message = f"Unexpected error: {e}"
+                grid_run.error_message = f"Unexpected error: {scrub_key(e)}"
                 grid_run.save()
-            raise CommandError(f"Unexpected error: {e}")
+            raise CommandError(f"Unexpected error: {scrub_key(e)}")
 
     def _render_contours(self, grid_run, contour_vars):
         """
@@ -369,7 +369,9 @@ class Command(BaseCommand):
                     )
                 except Exception as e:
                     failed += 1
-                    logger.warning(f"Contour render failed ({var} @ {ts}): {e}")
+                    logger.warning(
+                        f"Contour render failed ({var} @ {ts}): {scrub_key(e)}"
+                    )
                     continue
 
                 images.append(CachedContourImage(
@@ -409,7 +411,10 @@ class Command(BaseCommand):
         # STARTUP VALIDATION
         # ==============================================================
         api_key = getattr(settings, "OPENMETEO_API_KEY", "")
-        self.stdout.write(f"  Open-Meteo host: {OPENMETEO_HOST}")
+        # Report the endpoint the ensemble will actually call. Printing the
+        # base host while the grid quietly used a different one is what let
+        # an unused API key go unnoticed.
+        self.stdout.write(f"  Open-Meteo host: {ens.ensemble_url()}")
         if not api_key:
             self.stdout.write(self.style.WARNING(
                 "  ⚠ OPENMETEO_API_KEY is not set — using unauthenticated access. "
@@ -538,11 +543,11 @@ class Command(BaseCommand):
 
         if probe_error is not None:
             grid_run.status = UKRiskGridRun.Status.FAILED
-            grid_run.error_message = f"Probe failed: {probe_error}"
+            grid_run.error_message = f"Probe failed: {scrub_key(probe_error)}"
             grid_run.save()
             raise CommandError(
                 f"Ensemble probe failed after {PROBE_ATTEMPTS} attempts: "
-                f"{probe_error}"
+                f"{scrub_key(probe_error)}"
             )
 
         if not ref_times or not probe_points or probe_points[0] is None:
@@ -551,7 +556,7 @@ class Command(BaseCommand):
             grid_run.save()
             raise CommandError(
                 "Ensemble probe returned no members. Check connectivity and "
-                f"the endpoint: {ens.ENSEMBLE_HOST}"
+                f"the endpoint: {ens.ensemble_url()}"
             )
 
         num_hours = len(ref_times)
@@ -656,7 +661,7 @@ class Command(BaseCommand):
             except Exception as e:
                 if not _is_rate_limited(e):
                     self.stdout.write(self.style.ERROR(
-                        f"    Batch {batch_label} failed: {e}"
+                        f"    Batch {batch_label} failed: {scrub_key(e)}"
                     ))
                     total_pts_fail += len(batch_pts)
                     continue
@@ -683,7 +688,7 @@ class Command(BaseCommand):
                 except Exception as retry_e:
                     if retry_swept:
                         self.stdout.write(self.style.ERROR(
-                            f"    Retry failed: {retry_e}"
+                            f"    Retry failed: {scrub_key(retry_e)}"
                         ))
                         total_pts_fail += len(batch_pts)
                     else:
