@@ -83,6 +83,11 @@ class EnsembleRequestTests(SimpleTestCase):
     and the real query.
     """
 
+    def setUp(self):
+        # The downgrade latch is module state; reset it per test.
+        ens._ensemble_keyed = True
+        self.addCleanup(setattr, ens, "_ensemble_keyed", True)
+
     def _capture(self, fn):
         seen = {}
 
@@ -262,3 +267,131 @@ class KeyRedactionTests(SimpleTestCase):
         exc = RuntimeError("boom apikey=" + KEY)
 
         self.assertNotIn(KEY, scrub_key(exc))
+
+
+class EnsembleKeyRefusedTests(SimpleTestCase):
+    """
+    Open-Meteo licenses the Ensemble API separately from the standard one.
+
+    Our key is accepted by customer-api.open-meteo.com - a live run fetched
+    72 hours from all four deterministic models - and refused by
+    customer-ensemble-api.open-meteo.com with:
+
+        403 Client Error: Forbidden for url: .../v1/ensemble?...&apikey=***
+
+    A 403 is not a rate limit, so none of the retry machinery touches it.
+    Keyed-only behaviour would have taken the grid from a degraded 240
+    points to zero.
+    """
+
+    def setUp(self):
+        ens._ensemble_keyed = True
+        self.addCleanup(setattr, ens, "_ensemble_keyed", True)
+
+    def _api(self, first_status):
+        """Refuse the customer host, serve the free one."""
+        calls = []
+
+        class Resp:
+            def __init__(self, status):
+                self.status_code = status
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise AssertionError(
+                        f"raise_for_status called on {self.status_code}"
+                    )
+
+            def json(self):
+                return {"hourly": {}}
+
+        def get(url, params=None, timeout=None):
+            calls.append((url, params or {}))
+            if "customer-" in url:
+                return Resp(first_status)
+            return Resp(200)
+
+        return calls, get
+
+    def _run(self, calls, get):
+        with patch("forecasts.engine.ensemble._session.get", side_effect=get):
+            try:
+                ens.fetch_grid_members([55.9], [-3.1], forecast_days=1)
+            except (ens.EnsembleUnavailable, ValueError, KeyError,
+                    TypeError, IndexError):
+                pass
+
+    @override_settings(OPENMETEO_API_KEY=KEY)
+    def test_a_403_falls_back_to_the_free_host(self):
+        calls, get = self._api(403)
+
+        self._run(calls, get)
+
+        self.assertEqual(len(calls), 2, "no fallback attempt was made")
+        self.assertIn("customer-ensemble-api", calls[0][0])
+        self.assertEqual(calls[1][0], ens.ENSEMBLE_HOST)
+
+    @override_settings(OPENMETEO_API_KEY=KEY)
+    def test_the_fallback_request_carries_no_key(self):
+        """The free host must not be handed a credential it cannot use."""
+        calls, get = self._api(403)
+
+        self._run(calls, get)
+
+        self.assertNotIn("apikey", calls[1][1])
+
+    @override_settings(OPENMETEO_API_KEY=KEY)
+    def test_a_401_falls_back_too(self):
+        calls, get = self._api(401)
+
+        self._run(calls, get)
+
+        self.assertEqual(calls[1][0], ens.ENSEMBLE_HOST)
+
+    @override_settings(OPENMETEO_API_KEY=KEY)
+    def test_the_downgrade_latches(self):
+        """
+        38 batches must not each pay for a rejected request.
+
+        After the first refusal every later call goes straight to the free
+        host.
+        """
+        calls, get = self._api(403)
+
+        self._run(calls, get)
+        self._run(calls, get)
+        self._run(calls, get)
+
+        customer = [c for c in calls if "customer-" in c[0]]
+        self.assertEqual(len(customer), 1, "the key was retried after refusal")
+
+    @override_settings(OPENMETEO_API_KEY=KEY)
+    def test_the_reported_endpoint_follows_the_downgrade(self):
+        calls, get = self._api(403)
+
+        self.assertIn("customer-", ens.ensemble_url())
+        self._run(calls, get)
+        self.assertEqual(ens.ensemble_url(), ens.ENSEMBLE_HOST)
+
+    @override_settings(OPENMETEO_API_KEY=KEY)
+    def test_an_accepted_key_is_not_downgraded(self):
+        """If the plan does cover ensembles, nothing changes."""
+        calls, get = self._api(200)
+
+        self._run(calls, get)
+
+        self.assertEqual(len(calls), 1)
+        self.assertIn("customer-ensemble-api", calls[0][0])
+        self.assertEqual(calls[0][1].get("apikey"), KEY)
+        self.assertTrue(ens.ensemble_keyed())
+
+    @override_settings(OPENMETEO_API_KEY=KEY)
+    def test_a_500_is_not_treated_as_a_refusal(self):
+        """A server error must surface, not silently drop the key."""
+        calls, get = self._api(500)
+
+        with patch("forecasts.engine.ensemble._session.get", side_effect=get):
+            with self.assertRaises(AssertionError):
+                ens.fetch_grid_members([55.9], [-3.1], forecast_days=1)
+
+        self.assertTrue(ens._ensemble_keyed, "a 500 downgraded the key")
