@@ -33,15 +33,68 @@ def _api_key():
     return getattr(settings, "OPENMETEO_API_KEY", "")
 
 
-def ensemble_url():
-    """
-    The endpoint actually used, customer host included when a key is set.
+# Whether the key is accepted by the Ensemble API, for this process.
+#
+# Open-Meteo licenses the Ensemble API separately from the standard one, and
+# a key valid for the latter is refused by the former with 403 rather than
+# being ignored. Measured on the live API with our own key: the four
+# deterministic models fetched fine from customer-api.open-meteo.com, while
+# every ensemble call to customer-ensemble-api.open-meteo.com returned
+# "403 Client Error: Forbidden".
+#
+# A 403 is not a rate limit, so nothing upstream retries it: keyed-only
+# behaviour would take the grid from a degraded 240 points to none at all.
+# The first refusal latches this off and the process falls back to the free
+# host, which is exactly how the grid behaved before the key was wired up.
+_ensemble_keyed = True
 
-    The grid is by far the heaviest caller here — 51 members across four
-    variables for every point — so it is the first thing the free tier's
-    limiter refuses. It has to go out authenticated.
+
+def ensemble_keyed():
+    """Is this process still sending the key to the Ensemble API?"""
+    return bool(_api_key()) and _ensemble_keyed
+
+
+def ensemble_url():
+    """The endpoint actually used, for diagnostics."""
+    if ensemble_keyed():
+        return customer_url(ENSEMBLE_HOST)
+    return ENSEMBLE_HOST
+
+
+def _ensemble_get(params):
     """
-    return customer_url(ENSEMBLE_HOST)
+    GET the ensemble endpoint, downgrading to the free host if the key is
+    refused.
+
+    The downgrade is latched for the life of the process, so a run does not
+    pay for a rejected request on every one of its 38 batches.
+    """
+    global _ensemble_keyed
+
+    api_key = _api_key()
+    if api_key and _ensemble_keyed:
+        keyed = dict(params, apikey=api_key)
+        resp = _session.get(
+            customer_url(ENSEMBLE_HOST, api_key),
+            params=keyed,
+            timeout=REQUEST_TIMEOUT,
+        )
+        if resp.status_code not in (401, 403):
+            resp.raise_for_status()
+            return resp
+
+        logger.warning(
+            "Ensemble API refused the key (HTTP %s). It is licensed "
+            "separately from the standard Open-Meteo API. Falling back to "
+            "the free host for the rest of this process — expect rate "
+            "limiting on a grid workload.",
+            resp.status_code,
+        )
+        _ensemble_keyed = False
+
+    resp = _session.get(ENSEMBLE_HOST, params=params, timeout=REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    return resp
 
 
 # Member counts verified against the live API: ECMWF 51, ICON 40, GFS 31.
@@ -97,15 +150,9 @@ def fetch_members(lat, lon, forecast_days=3, models=ENSEMBLE_MODELS):
             "timezone": "UTC",
             "forecast_days": forecast_days,
         }
-        api_key = _api_key()
-        if api_key:
-            params["apikey"] = api_key
 
         try:
-            resp = _session.get(
-                ensemble_url(), params=params, timeout=REQUEST_TIMEOUT
-            )
-            resp.raise_for_status()
+            resp = _ensemble_get(params)
             hourly = resp.json().get("hourly", {})
         except Exception as e:
             logger.warning(
@@ -190,12 +237,7 @@ def fetch_grid_members(lats, lons, forecast_days=2, model=GRID_ENSEMBLE):
         "timezone": "UTC",
         "forecast_days": forecast_days,
     }
-    api_key = _api_key()
-    if api_key:
-        params["apikey"] = api_key
-
-    resp = _session.get(ensemble_url(), params=params, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    resp = _ensemble_get(params)
     payload = resp.json()
 
     # A single coordinate returns an object; several return a list.
