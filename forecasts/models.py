@@ -169,6 +169,10 @@ class UKRiskGridRun(models.Model):
     lon_min = models.FloatField(default=-7.6)
     lon_max = models.FloatField(default=1.8)
     resolution = models.FloatField(default=0.5, help_text="Grid spacing in degrees")
+    # Starts as the intended grid size, then is corrected at finalise to
+    # the number of points that actually returned data. The map reads it
+    # as coverage, so it has to mean what was achieved, not what was
+    # asked for. The intended size stays derivable from the bounds above.
     grid_points = models.IntegerField(default=0)
     num_hours = models.IntegerField(default=0)
     models_used = models.JSONField(default=list)

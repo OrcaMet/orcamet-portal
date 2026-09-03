@@ -452,8 +452,9 @@ def map_grid_points_json(request):
         first_ts = points_qs.order_by("timestamp").values_list("timestamp", flat=True).first()
         points_qs = points_qs.filter(timestamp=first_ts) if first_ts else points_qs.none()
 
-    # Flat arrays instead of objects — this list is ~380 entries fetched
-    # once per frame, so the key-name overhead of a dict per point adds up.
+    # Flat arrays instead of objects — this list is a few hundred entries
+    # fetched once per frame, so the key-name overhead of a dict per point
+    # adds up.
     points = [
         # Index 7 is p_cancel; the client's FIELD_FOR_VAR maps by position.
         [p.latitude, p.longitude, _num(p.risk), _num(p.wind_speed), _num(p.wind_gusts), _num(p.precipitation), _num(p.temperature), _num(p.p_cancel)]

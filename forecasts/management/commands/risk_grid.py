@@ -904,9 +904,16 @@ class Command(BaseCommand):
                 f"{blend_errors}/{total_points} points had zero weight."
             )
 
-        # Mark run as successful
+        # Mark run as successful. grid_points is corrected here from the
+        # intended grid size to the number of points that actually
+        # returned data: the map prints this figure as its coverage, and
+        # a rate-limited run was reporting the full grid while holding
+        # barely half of it. Nothing is lost by overwriting — the
+        # intended size is still derivable from the run's own bounds and
+        # resolution.
         grid_run.status = UKRiskGridRun.Status.SUCCESS
         grid_run.num_hours = num_hours
+        grid_run.grid_points = successful_points
         grid_run.models_used = successful_models
         grid_run.save()
 
