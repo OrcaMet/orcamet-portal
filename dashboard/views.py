@@ -20,7 +20,8 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from forecasts.models import ForecastRun, HourlyForecast, UKRiskGridRun, UKRiskGridPoint, CachedContourImage, MapThresholds
-from sites.models import Site
+from sites.models import Site, ThresholdProfile
+from dashboard.map_legend import legend_data
 
 
 def _visible_sites(user):
@@ -302,6 +303,11 @@ def weather_map(request):
     context["map_thresholds"] = MapThresholds.load().as_dict()
     context["basemap_url"] = basemap_url()
 
+    # Legend colours come from the same colormaps the contours are rendered
+    # with. The template used to carry its own table, which had drifted: the
+    # wind key showed green at 7 m/s where YlOrRd is pale yellow.
+    context["map_legend"] = legend_data()
+
     return render(request, "dashboard/weather_map.html", context)
 
 
@@ -329,6 +335,17 @@ def map_sites_json(request):
             "exposure": site.get_exposure_display(),
             "has_forecast": bool(run),
             "recommendation": run.recommendation if run else None,
+            # The default contour layer is a chance of cancellation, and the
+            # pin beside it showed only a severity score — two different
+            # measures with nothing saying so. This is the same quantity the
+            # contour draws, computed for this site's own thresholds.
+            # None stays None: a null must never render as 0%, which reads as
+            # "certainly fine" rather than "we do not know".
+            "p_cancel": (
+                round(run.p_cancel * 100) if run and run.p_cancel is not None
+                else None
+            ),
+            "limiting_variable": run.limiting_variable if run else None,
             "peak_risk": _num(run.peak_risk) if run else None,
             "peak_wind": _num(run.peak_wind) if run else None,
             "peak_gust": _num(run.peak_gust) if run else None,
@@ -377,6 +394,20 @@ def map_sites_hourly_json(request):
             continue
         hours_by_site.setdefault(site.id, []).extend(hours_by_run.get(run.id, []))
 
+    # Each site's own limits, so a pin is scored the way that site is scored
+    # everywhere else in the portal. The map used to gate every marker against
+    # the single UK-wide MapThresholds row, which gave a sheltered site and an
+    # exposed one identical verdicts on identical weather — the exposure
+    # column in the popup said they differed while the colour said they did
+    # not. Sent once per site rather than per feature: repeating ten numbers
+    # across every site in every one of 72 frames is most of the payload.
+    site_thresholds = {}
+    for profile in ThresholdProfile.objects.filter(
+        site__in=sites_list, is_active=True
+    ):
+        # One active profile per site; first wins if the data says otherwise.
+        site_thresholds.setdefault(str(profile.site_id), profile.as_dict())
+
     site_hours = []
     timestamps_set = set()
 
@@ -413,7 +444,11 @@ def map_sites_hourly_json(request):
                 },
             })
 
-    return JsonResponse({"timestamps": ts_strs, "frames": frames})
+    return JsonResponse({
+        "timestamps": ts_strs,
+        "frames": frames,
+        "thresholds": site_thresholds,
+    })
 
 
 @login_required(login_url="/login/")

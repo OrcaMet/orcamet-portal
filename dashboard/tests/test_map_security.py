@@ -145,7 +145,14 @@ class MapThresholdsWiringTests(TestCase):
 
         self.assertNotIn("10,14", crisk.replace(" ", ""))
         self.assertNotIn("15,20", crisk.replace(" ", ""))
-        self.assertIn("TH.", crisk)
+
+        # The scorer now takes the threshold set to score against, so a site
+        # can be gated by its own ThresholdProfile. It reads every limit off
+        # that argument, and falls back to the admin-provided TH when a site
+        # has no profile of its own — which is what this originally guarded.
+        self.assertIn("th.wind_mean_caution", crisk)
+        self.assertIn("th.gust_caution", crisk)
+        self.assertIn("th = th || TH", crisk)
 
 
 class GridPointsPayloadTests(TestCase):
