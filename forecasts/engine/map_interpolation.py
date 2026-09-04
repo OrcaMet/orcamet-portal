@@ -72,6 +72,36 @@ VARIABLE_CMAPS = {
 
 
 # ============================================================
+# PROJECTION
+# ============================================================
+#
+# The PNG this module renders is placed by L.imageOverlay, which stretches it
+# linearly across the bounding box *in Web Mercator* — the projection Leaflet
+# draws in. Sampling and plotting the surface linearly in latitude instead
+# produced an equirectangular image, and the mismatch between the two moved
+# every contour feature north: measured at +25 km through northern England,
+# peaking at 26 km near 54.3N. Site markers are placed by Leaflet from their
+# true coordinates, so the colour under a pin was the weather from ~25 km
+# south of it, and the hover readout — which uses the stored grid coordinates
+# — disagreed with the colour beneath the cursor.
+#
+# So the render grid is spaced evenly in Mercator y, and the figure's y axis
+# is in Mercator y. Longitude needs no such treatment: Mercator is linear in
+# longitude.
+
+def mercator_y(lat_deg):
+    """Web Mercator y for a latitude in degrees (unit sphere, no scaling)."""
+    lat = np.radians(np.asarray(lat_deg, dtype=float))
+    return np.log(np.tan(np.pi / 4.0 + lat / 2.0))
+
+
+def inverse_mercator_y(y):
+    """Latitude in degrees for a Web Mercator y."""
+    y = np.asarray(y, dtype=float)
+    return np.degrees(2.0 * np.arctan(np.exp(y)) - np.pi / 2.0)
+
+
+# ============================================================
 # INTERPOLATION
 # ============================================================
 
@@ -141,7 +171,13 @@ def interpolate_risk_surface(lats, lons, values, resolution=INTERP_RESOLUTION,
         n_lat = int(resolution * lat_range / lon_range)
 
     grid_lon_1d = np.linspace(UK_LON_MIN, UK_LON_MAX, n_lon)
-    grid_lat_1d = np.linspace(UK_LAT_MIN, UK_LAT_MAX, n_lat)
+    # Rows evenly spaced in Mercator y, not in latitude, so that each row of
+    # the rendered image lands on the latitude Leaflet will draw it at. The
+    # returned latitudes are still true latitudes — only their spacing
+    # changes — so distance-based blanking below is unaffected.
+    grid_lat_1d = inverse_mercator_y(
+        np.linspace(mercator_y(UK_LAT_MIN), mercator_y(UK_LAT_MAX), n_lat)
+    )
     grid_lons, grid_lats = np.meshgrid(grid_lon_1d, grid_lat_1d)
 
     grid_pts = np.column_stack([grid_lons.ravel(), grid_lats.ravel()])
@@ -239,9 +275,13 @@ def render_contour_to_bytes(
     fig.patch.set_alpha(0)
     ax.set_facecolor("none")
 
+    # Plot against Mercator y so the image matches how L.imageOverlay will
+    # stretch it. See the projection note at the top of this module.
+    grid_y = mercator_y(grid_lats)
+
     try:
         ax.contourf(
-            grid_lons, grid_lats, grid_values_masked,
+            grid_lons, grid_y, grid_values_masked,
             levels=levels,
             cmap=cm["cmap"],
             norm=mcolors.Normalize(vmin=cm["vmin"], vmax=cm["vmax"]),
@@ -265,7 +305,7 @@ def render_contour_to_bytes(
         return buf.getvalue()
 
     ax.set_xlim(UK_LON_MIN, UK_LON_MAX)
-    ax.set_ylim(UK_LAT_MIN, UK_LAT_MAX)
+    ax.set_ylim(float(mercator_y(UK_LAT_MIN)), float(mercator_y(UK_LAT_MAX)))
     ax.set_aspect("auto")
     ax.axis("off")
     plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
