@@ -24,3 +24,7 @@ numpy>=2.1,<3.0
 pandas>=2.2,<4.0
 matplotlib>=3.9,<4.0
 scipy>=1.14,<2.0
+# Already installed as a matplotlib dependency, but map_interpolation imports
+# it directly to palette-quantise the contour PNGs — so it is declared here
+# rather than relied on transitively.
+pillow>=10.0,<13.0
