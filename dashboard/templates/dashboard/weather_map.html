@@ -523,6 +523,17 @@ function contourUrl(timestamp, varName) {
             '<div class="pp-ft"><span>' + esc(dt) + '</span><a href="/dashboard/site/' + encodeURIComponent(p.id) + '/" class="pp-lk">Full Forecast →</a></div></div>';
     }
 
+    /* Shown when the contour timeline reaches an hour the site forecasts do
+       not cover. Saying nothing is known for that hour is the point: the
+       alternative was a pin carrying some other hour's numbers. */
+    function popNoHour(p, when) {
+        return '<div class="pp-hd"><div><div class="pp-nm">' + esc(p.name) + '</div><div class="pp-sub">' + esc(p.client) + ' · ' + esc(p.postcode) + '</div></div>' +
+            '<span class="pp-bg pp-bpn">NO DATA</span></div>' +
+            '<div class="pp-bd"><div style="text-align:center;padding:0.4rem 0;color:var(--text-secondary);font-size:0.8rem">' +
+            'No site forecast for ' + (when ? esc(when) : 'this hour') + '</div>' +
+            '<div class="pp-ft"><span></span><a href="/dashboard/site/' + encodeURIComponent(p.id) + '/" class="pp-lk">Full Forecast →</a></div></div>';
+    }
+
     var gridTimestamps = [];
     var siteGJ = null;
     var hourlyD = null;
@@ -569,39 +580,111 @@ function contourUrl(timestamp, varName) {
             .catch(function(e) { console.warn('sites:', e); });
     }
 
+    /* The site frames and the contour timeline are two independently
+       produced time axes — one from the per-site forecast cron, one from the
+       grid cron — and they do not always agree. The site runner drops hours
+       with incomplete ensemble data and skips a whole day whose work window
+       has none, and either cron can fail on its own. Looking a frame up by
+       the contour timeline's *position* therefore handed each pin some other
+       hour's weather, while the clock in the bottom bar read the grid's hour
+       and nothing on screen said the two had diverged.
+
+       Frames are keyed by instant instead. Parsing to epoch milliseconds
+       rather than string-matching keeps the two axes comparable however each
+       one serialises its UTC offset. */
+    var hourlyByTime = {};
+
+    function timeKey(ts) {
+        var ms = Date.parse(ts);
+        return isNaN(ms) ? null : String(ms);
+    }
+
+    function indexHourly() {
+        hourlyByTime = {};
+        if (!hourlyD || !hourlyD.timestamps) return;
+        hourlyD.timestamps.forEach(function(ts) {
+            var k = timeKey(ts);
+            if (k !== null) hourlyByTime[k] = hourlyD.frames[ts];
+        });
+    }
+
     function loadHourly() {
         return fetchWithTimeout(HOUR_URL, 15000)
-            .then(function(d) { hourlyD = d; })
+            .then(function(d) { hourlyD = d; indexHourly(); })
             .catch(function(e) { console.warn('hourly:', e); });
     }
 
-    function renderSites(idx) {
-        siteCluster.clearLayers();
+    // Set by renderSites when the timeline sits on an hour the site
+    // forecasts do not cover, so renderFrame can say so rather than leave
+    // pins on screen that look authoritative.
+    var siteHourNote = '';
 
-        var useHourly = hourlyD && hourlyD.timestamps && hourlyD.timestamps.length > 0 && idx < hourlyD.timestamps.length;
+    function addSummaryMarkers() {
+        if (!siteGJ || !siteGJ.features) return;
+        siteGJ.features.forEach(function(f) {
+            var c = f.geometry.coordinates;
+            var p = f.properties;
+            var m = L.marker([c[1], c[0]], {icon: mkI(p.recommendation || 'PENDING')});
+            m.bindPopup(popSum(p), {maxWidth: 290, minWidth: 230});
+            siteCluster.addLayer(m);
+        });
+    }
 
-        if (useHourly) {
-            var ts = hourlyD.timestamps[idx];
-            var frame = hourlyD.frames[ts];
-            if (frame && frame.features) {
-                frame.features.forEach(function(f) {
-                    var c = f.geometry.coordinates;
-                    var p = f.properties;
-                    var rec = verdictOf(p.wind_speed, p.wind_gusts, p.precipitation, p.temperature);
-                    var m = L.marker([c[1], c[0]], {icon: mkI(rec)});
-                    m.bindPopup(popHr(p, ts), {maxWidth: 290, minWidth: 230});
-                    siteCluster.addLayer(m);
-                });
-            }
-        } else if (siteGJ && siteGJ.features) {
-            siteGJ.features.forEach(function(f) {
-                var c = f.geometry.coordinates;
-                var p = f.properties;
-                var m = L.marker([c[1], c[0]], {icon: mkI(p.recommendation || 'PENDING')});
-                m.bindPopup(popSum(p), {maxWidth: 290, minWidth: 230});
-                siteCluster.addLayer(m);
-            });
+    function addUnknownMarkers(ts) {
+        if (!siteGJ || !siteGJ.features) return;
+        var when = '';
+        var parsed = new Date(ts);
+        if (!isNaN(parsed.getTime())) {
+            when = DATE_FMT.format(parsed) + ' ' + TIME_FMT.format(parsed);
         }
+        siteGJ.features.forEach(function(f) {
+            var c = f.geometry.coordinates;
+            var p = f.properties;
+            var m = L.marker([c[1], c[0]], {icon: mkI('PENDING')});
+            m.bindPopup(popNoHour(p, when), {maxWidth: 290, minWidth: 230});
+            siteCluster.addLayer(m);
+        });
+    }
+
+    /* ts is a timeline instant, or null when there is no timeline at all (no
+       grid run, or a boot path that never got one) and the daily summary is
+       the only thing there is to show. */
+    function renderSites(ts) {
+        siteCluster.clearLayers();
+        siteHourNote = '';
+
+        var haveHourly = hourlyD && hourlyD.timestamps && hourlyD.timestamps.length > 0;
+
+        if (!ts || !haveHourly) {
+            // No timeline, or the hourly fetch failed outright. The daily
+            // summary is a different metric, but it is an honest one.
+            addSummaryMarkers();
+            return;
+        }
+
+        var key = timeKey(ts);
+        var frame = key === null ? null : hourlyByTime[key];
+
+        if (!frame || !frame.features) {
+            // The grid covers this hour and the site forecasts do not. Show
+            // the sites as unknown rather than borrowing another hour.
+            siteHourNote = 'no site forecast for this hour';
+            addUnknownMarkers(ts);
+            return;
+        }
+
+        frame.features.forEach(function(f) {
+            var c = f.geometry.coordinates;
+            var p = f.properties;
+            var rec = verdictOf(p.wind_speed, p.wind_gusts, p.precipitation, p.temperature);
+            var m = L.marker([c[1], c[0]], {icon: mkI(rec)});
+            m.bindPopup(popHr(p, ts), {maxWidth: 290, minWidth: 230});
+            siteCluster.addLayer(m);
+        });
+    }
+
+    function currentTimestamp() {
+        return gridTimestamps.length ? gridTimestamps[curIdx] : null;
     }
 
     function renderFrame(idx) {
@@ -609,7 +692,7 @@ function contourUrl(timestamp, varName) {
             // No grid run yet. The contour timeline is unavailable, but site
             // markers do not depend on it and must still be drawn — otherwise
             // the map renders completely empty.
-            renderSites(0);
+            renderSites(null);
             return;
         }
 
@@ -619,13 +702,17 @@ function contourUrl(timestamp, varName) {
 
         $bdate.textContent = LONG_DATE_FMT.format(d);
         $bhour.textContent = TIME_FMT.format(d);
-        $bsub.textContent = 'Hour ' + (curIdx + 1) + '/' + gridTimestamps.length;
         $rng.value = curIdx;
 
         loadContourImage(ts, curVar);
         preloadAhead(curIdx, curVar);
         fetchGridPoints(ts);
-        renderSites(curIdx);
+        renderSites(ts);
+
+        // After renderSites, which decides whether the site forecasts reach
+        // this hour.
+        $bsub.textContent = 'Hour ' + (curIdx + 1) + '/' + gridTimestamps.length +
+            (siteHourNote ? ' · ' + siteHourNote : '');
     }
 
     function renderLgnd() {
@@ -783,7 +870,7 @@ function contourUrl(timestamp, varName) {
             $rng.max = gridTimestamps.length - 1;
             renderFrame(0);
         } else {
-            renderSites(0);
+            renderSites(null);
         }
         fitToSites();
         dismissLoading();
@@ -827,7 +914,7 @@ function contourUrl(timestamp, varName) {
         console.error('Boot error:', e);
         clearTimeout(bootTimeout);
         document.getElementById('gstatus').textContent = 'Map loaded (contour unavailable)';
-        renderSites(0);
+        renderSites(currentTimestamp());
         fitToSites();
         dismissLoading();
     });
@@ -837,7 +924,7 @@ function contourUrl(timestamp, varName) {
        the slider, so a long-open map showed stale pins while looking live. */
     setInterval(function() {
         Promise.all([loadSites(), loadHourly()]).then(function() {
-            renderSites(curIdx);
+            renderSites(currentTimestamp());
         });
     }, 300000);
 
