@@ -205,3 +205,61 @@ class BootPathTemplateTests(TestCase):
         self.assertIn("loadSites()", block)
         self.assertIn("loadHourly()", block)
         self.assertIn("renderSites(", block)
+
+
+class SiteFrameLookupTests(TestCase):
+    """
+    Site frames must be found by instant, not by timeline position.
+
+    The contour timeline and the site frames come from two separate crons.
+    The site runner drops hours with incomplete ensemble data and skips a
+    whole day whose work window has none, and either cron can fail on its
+    own — so the two axes can differ in length and in where they start.
+    Indexing one by the other's position handed every pin some other hour's
+    weather, with the clock reading the grid's hour and nothing on screen
+    saying the two had diverged.
+
+    As with BootPathTemplateTests, these assert on the template source: the
+    suite has no JS runtime, so they are deliberately narrow.
+    """
+
+    def setUp(self):
+        self.source = TEMPLATE.read_text(encoding="utf-8")
+
+    def test_frames_are_indexed_by_instant(self):
+        self.assertIn("function timeKey(", self.source)
+        self.assertIn("function indexHourly(", self.source)
+        self.assertIn("Date.parse(ts)", self.source)
+
+    def test_the_index_is_rebuilt_whenever_hourly_data_arrives(self):
+        """A refresh that did not reindex would match against stale hours."""
+        idx = self.source.find("function loadHourly()")
+        self.assertNotEqual(idx, -1, "loadHourly not found")
+        self.assertIn("indexHourly()", self.source[idx:idx + 400])
+
+    def test_render_sites_takes_a_timestamp_not_an_index(self):
+        self.assertIn("function renderSites(ts)", self.source)
+
+    def test_no_call_site_passes_a_position(self):
+        """
+        renderSites(curIdx) and renderSites(0) were the defect. Every caller
+        must now pass an instant, or null where there is no timeline.
+        """
+        self.assertNotIn("renderSites(curIdx)", self.source)
+        self.assertNotIn("renderSites(0)", self.source)
+
+    def test_a_missing_hour_is_not_borrowed_from_another(self):
+        """An uncovered hour must read as unknown, not as someone else's."""
+        self.assertIn("no site forecast for this hour", self.source)
+        self.assertIn("function popNoHour(", self.source)
+        self.assertIn("addUnknownMarkers(", self.source)
+
+    def test_the_gap_is_stated_on_screen(self):
+        """The note has to reach the user, not just the marker icons."""
+        idx = self.source.find("siteHourNote ? ")
+        self.assertNotEqual(idx, -1, "siteHourNote never reaches the time bar")
+
+    def test_the_summary_fallback_survives(self):
+        """With no timeline at all, the daily summary is still shown."""
+        self.assertIn("renderSites(null)", self.source)
+        self.assertIn("function addSummaryMarkers(", self.source)
