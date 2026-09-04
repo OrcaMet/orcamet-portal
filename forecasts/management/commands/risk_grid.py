@@ -736,13 +736,20 @@ class Command(BaseCommand):
                 # variables is carried by the scenario, not assumed.
                 # NaN compares False throughout, which correctly reads as
                 # "no evidence of a breach" rather than inventing one.
+                #
+                # The comparison is >=, matching core.evaluate_thresholds and
+                # the map's own marker gate. This counted with > alone, so a
+                # gust landing exactly on the cancel limit stopped work on the
+                # pin and on the site forecast, but was not counted as a
+                # breaching member in the contour beneath it. A limit reads as
+                # "this value stops work", not "anything above it does".
                 breach = np.zeros(stacked["wind_gusts_10m"].shape, dtype=bool)
                 if c_wind is not None:
-                    breach |= stacked["wind_speed_10m"] > c_wind
+                    breach |= stacked["wind_speed_10m"] >= c_wind
                 if c_gust is not None:
-                    breach |= stacked["wind_gusts_10m"] > c_gust
+                    breach |= stacked["wind_gusts_10m"] >= c_gust
                 if c_prcp is not None:
-                    breach |= stacked["precipitation"] > c_prcp
+                    breach |= stacked["precipitation"] >= c_prcp
                 if c_cold is not None:
                     breach |= stacked["temperature_2m"] <= c_cold
                 if c_hot is not None:
