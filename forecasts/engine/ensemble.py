@@ -115,9 +115,41 @@ VARIABLES = {
     "temperature_2m": None,
 }
 
-HOURLY_VARS = ",".join(VARIABLES)
+# Fetched and carried on every member, but never gated against a threshold.
+#
+# Wind direction has no caution or cancel limit — no direction is unsafe on
+# its own. It decides which face of a structure is in the lee, which is the
+# question a rope access supervisor actually asks once the speed is
+# marginal, so it is worth carrying even though it can never stop work by
+# itself. Kept out of VARIABLES so count_breaches and the gate logic are
+# untouched by its presence.
+UNGATED_VARIABLES = {
+    "wind_direction_10m": None,
+}
+
+# What each member dict carries. VARIABLES stays the gate list.
+MEMBER_VARIABLES = {**VARIABLES, **UNGATED_VARIABLES}
+
+HOURLY_VARS = ",".join(MEMBER_VARIABLES)
 
 REQUEST_TIMEOUT = 90
+
+
+def _attach_ungated(member, hourly, suffix, n_hours):
+    """
+    Add the ungated variables to a member that already has every gated one.
+
+    Best effort by design: a missing or short series becomes None rather
+    than disqualifying the member. The gated variables decide whether a
+    forecast can be made at all, and losing every member of a model because
+    it declined to report wind direction would trade a usable forecast for
+    an optional arrow.
+    """
+    for var in UNGATED_VARIABLES:
+        values = hourly.get(f"{var}{suffix}")
+        member[var] = (
+            values if values is not None and len(values) == n_hours else None
+        )
 
 
 class EnsembleUnavailable(RuntimeError):
@@ -194,6 +226,7 @@ def fetch_members(lat, lon, forecast_days=3, models=ENSEMBLE_MODELS):
                     break
                 member[var] = values
             if complete:
+                _attach_ungated(member, hourly, suffix, len(times))
                 members.append(member)
 
         logger.debug("Ensemble %s contributed %d members", model, len(suffixes))
@@ -280,6 +313,7 @@ def fetch_grid_members(lats, lons, forecast_days=2, model=GRID_ENSEMBLE):
                     break
                 member[var] = values
             if ok:
+                _attach_ungated(member, hourly, suffix, len(times))
                 members.append(member)
 
         per_point.append(members or None)

@@ -586,6 +586,20 @@ class Command(BaseCommand):
         breach_counts = np.zeros((total_points, num_hours), dtype=np.int16)
         member_counts = np.zeros((total_points,), dtype=np.int16)
 
+        # Wind direction accumulates as vector components, never as degrees.
+        # The arithmetic mean of 350 and 10 is 180 — a southerly, the exact
+        # opposite of the northerly both members forecast. Summing unit
+        # vectors and taking the angle of the resultant is the only way to
+        # average a direction.
+        #
+        # Weighted by each member's wind speed, so the direction reported is
+        # the one that matters when it is blowing: a member forecasting a
+        # 2 m/s breeze from the east should not pull the arrow away from
+        # thirty members forecasting a 20 m/s westerly.
+        acc_dir_u = np.zeros((total_points, num_hours), dtype=np.float32)
+        acc_dir_v = np.zeros((total_points, num_hours), dtype=np.float32)
+        wt_dir = np.zeros((total_points, num_hours), dtype=np.float32)
+
         mem_mb = total_points * num_hours * 4 * 9 / 1024 / 1024
         self.stdout.write(
             f"  Accumulators: {total_points}×{num_hours} = {mem_mb:.1f} MB"
@@ -757,6 +771,27 @@ class Command(BaseCommand):
 
                 breach_counts[idx] = breach.sum(axis=0)
                 member_counts[idx] = len(members)
+
+                # Direction is optional: a model that declines to report it
+                # still gives a usable forecast, it just gets no arrow.
+                dirs = np.array(
+                    [
+                        [np.nan] * num_hours if m.get("wind_direction_10m") is None
+                        else [np.nan if v is None else v
+                              for v in m["wind_direction_10m"]]
+                        for m in members
+                    ],
+                    dtype=np.float32,
+                )
+                speeds = stacked["wind_speed_10m"]
+                usable = np.isfinite(dirs) & np.isfinite(speeds)
+                if usable.any():
+                    radians = np.radians(np.where(usable, dirs, 0.0))
+                    weight = np.where(usable, speeds, 0.0)
+                    acc_dir_u[idx] += (weight * np.sin(radians)).sum(axis=0)
+                    acc_dir_v[idx] += (weight * np.cos(radians)).sum(axis=0)
+                    wt_dir[idx] += weight.sum(axis=0)
+
                 total_pts_ok += 1
 
             del per_point
@@ -823,7 +858,27 @@ class Command(BaseCommand):
                 np.nan,
             )
 
+        # Resolve the accumulated vectors back into a direction, plus how
+        # much the members agreed on it. atan2(u, v) with u east and v north
+        # returns the compass bearing directly; the modulo puts it in 0-360
+        # rather than -180 to 180.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            has_dir = wt_dir > 0
+            direction_grid = np.where(
+                has_dir,
+                np.degrees(np.arctan2(acc_dir_u, acc_dir_v)) % 360.0,
+                np.nan,
+            )
+            # Resultant length over the sum of the weights: 1 when every
+            # member points the same way, 0 when they cancel out entirely.
+            agreement_grid = np.where(
+                has_dir,
+                np.hypot(acc_dir_u, acc_dir_v) / np.where(has_dir, wt_dir, 1.0),
+                np.nan,
+            )
+
         del wt_wind, wt_gust, wt_prcp, wt_temp, breach_counts
+        del acc_dir_u, acc_dir_v, wt_dir
         gc.collect()
 
         # Build DB records in chunks
@@ -853,6 +908,8 @@ class Command(BaseCommand):
                     continue
 
                 pc = float(p_cancel_grid[pt_idx, t_idx])
+                wd = float(direction_grid[pt_idx, t_idx])
+                wa = float(agreement_grid[pt_idx, t_idx])
 
                 all_point_records.append(UKRiskGridPoint(
                     run=grid_run,
@@ -867,6 +924,20 @@ class Command(BaseCommand):
                     # Null rather than 0 when unknown — see the note above.
                     p_cancel=round(pc, 2) if np.isfinite(pc) else None,
                     ensemble_members=int(member_counts[pt_idx]) or None,
+                    # Null rather than 0 for the same reason: 0 degrees is a
+                    # northerly, not an absence of one.
+                    # The second modulo is not redundant: a resultant pointing
+                    # due north comes back from arctan2 as a hair below zero,
+                    # which the first modulo lifts to 359.99..., and rounding
+                    # then gives 360.0 — outside the 0-359.9 the field is
+                    # documented to hold. Both mean north; 0 is the canonical
+                    # way to say it.
+                    wind_direction=(
+                        round(wd, 1) % 360 if np.isfinite(wd) else None
+                    ),
+                    wind_direction_agreement=(
+                        round(wa, 3) if np.isfinite(wa) else None
+                    ),
                 ))
 
                 # Flush to DB periodically to limit in-memory records

@@ -32,6 +32,8 @@
 .pill { padding:0.25rem 0.65rem; border:none; background:transparent; color:var(--text-secondary); font-size:0.72rem; font-weight:600; border-radius:3px; cursor:pointer; transition:all 0.12s; font-family:inherit; white-space:nowrap; }
 .pill:hover { color:var(--text-primary); }
 .pill.on { background:var(--teal); color:#fff; }
+/* Toggled on, but the data behind it is absent — see renderWind(). */
+.pill.pill-empty { opacity:0.45; text-decoration:line-through; }
 .tbar-r { display:flex; align-items:center; gap:0.6rem; }
 .counts { display:flex; gap:0.4rem; }
 .cnt { font-size:0.68rem; font-weight:600; padding:0.15rem 0.4rem; border-radius:3px; }
@@ -60,6 +62,16 @@
 .rng::-moz-range-thumb { width:16px; height:16px; border-radius:50%; background:var(--teal); border:2px solid #fff; cursor:pointer; }
 .speed-btn { font-size:0.62rem; padding:0.2rem 0.4rem; border:1px solid var(--border); background:var(--surface); color:var(--text-secondary); border-radius:3px; cursor:pointer; font-family:inherit; }
 .speed-btn:hover { color:#fff; border-color:var(--teal); }
+
+/* --- Wind arrows --- */
+.warrow { pointer-events:none; }
+.warrow svg { display:block; overflow:visible; }
+.warrow path { stroke:#e2e8f0; stroke-width:1.6; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+.warrow .wa-head { fill:#e2e8f0; stroke:none; }
+/* Members disagreeing on direction fade the arrow rather than hiding it —
+   "we do not know which way" is itself worth seeing. */
+.warrow.wa-soft { opacity:0.32; }
+.warrow.wa-mid  { opacity:0.62; }
 
 /* --- Hover readout --- */
 .hovertip { position:absolute; z-index:500; pointer-events:none; background:rgba(19,31,53,0.95); border:1px solid var(--border); border-radius:5px; padding:0.3rem 0.55rem; font-size:0.72rem; color:#fff; white-space:nowrap; display:none; transform:translate(-50%,-130%); box-shadow:0 2px 8px rgba(0,0,0,0.4); }
@@ -151,6 +163,7 @@
             </div>
         </div>
         <div class="tbar-r">
+            <button class="pill" id="windtoggle" title="Wind direction arrows">🡒 Wind</button>
             <div class="counts">
                 {% if go_count %}<span class="cnt cnt-g">{{ go_count }} GO</span>{% endif %}
                 {% if caution_count %}<span class="cnt cnt-c">{{ caution_count }} CAUTION</span>{% endif %}
@@ -305,6 +318,18 @@
 
     function recOf(r){return r<20?'GO':r<50?'CAUTION':'CANCEL';}
 
+    /* Compass point for a direction in degrees. Named the way a forecast is
+       spoken — "a westerly" is wind FROM the west, which is what the stored
+       value means, so no inversion happens here. */
+    var COMPASS = ['N','NNE','NE','ENE','E','ESE','SE','SSE',
+                   'S','SSW','SW','WSW','W','WNW','NW','NNW'];
+
+    function compassOf(deg) {
+        if (deg == null || isNaN(deg)) return '';
+        var i = Math.round(((deg % 360) + 360) % 360 / 22.5) % 16;
+        return COMPASS[i];
+    }
+
     /* Legend colours are sampled from the same matplotlib colormaps the
        contours are rendered with, server-side (dashboard/map_legend.py).
        This table used to be written by hand here and had drifted from those
@@ -379,13 +404,21 @@ function contourUrl(timestamp, varName) {
     var gridPointsCache = {};
     var curGridPoints = null;
 
+    /* The wind arrows are drawn from these same points, so they are rebuilt
+       whenever a frame's points land — otherwise stepping through the
+       timeline left the previous hour's arrows over the new hour's contour. */
+    function useGridPoints(pts) {
+        curGridPoints = pts;
+        if (windOn) renderWind();
+    }
+
     function fetchGridPoints(timestamp) {
         var key = timestamp || '';
         if (gridPointsCache[key]) {
             if (gridPointsCache[key].then) {
-                gridPointsCache[key].then(function(pts) { curGridPoints = pts; });
+                gridPointsCache[key].then(useGridPoints);
             } else {
-                curGridPoints = gridPointsCache[key];
+                useGridPoints(gridPointsCache[key]);
             }
             return;
         }
@@ -394,7 +427,7 @@ function contourUrl(timestamp, varName) {
         var req = fetchWithTimeout(url, 10000).then(function(d) {
             var pts = d.points || [];
             gridPointsCache[key] = pts;
-            curGridPoints = pts;
+            useGridPoints(pts);
             return pts;
         }).catch(function(e) {
             console.warn('grid-points:', e);
@@ -824,6 +857,134 @@ function contourUrl(timestamp, varName) {
         });
     }
 
+    /* ================================================================
+       WIND DIRECTION ARROWS
+
+       Drawn from the same grid points the hover readout reads, so the
+       arrows and the numbers can never disagree.
+
+       Direction is stored the way meteorology states it: the direction the
+       wind comes FROM. An arrow glyph points where it is GOING, so the
+       drawn bearing is direction + 180. Getting that backwards would put
+       every arrow in the map exactly wrong, which is worse than no arrows
+       at all — a supervisor picking the sheltered face of a building would
+       pick the windward one.
+       ================================================================ */
+    var windLayer = L.layerGroup();
+    var windOn = false;
+
+    // Arrow spacing in pixels. The grid is ~0.5 degrees, which is dense
+    // enough to smear into noise when zoomed out, so points are thinned to
+    // whatever keeps them this far apart on screen.
+    var WIND_MIN_SPACING = 46;
+
+    // Below this level of member agreement the mean direction is not worth
+    // stating plainly. See UKRiskGridPoint.wind_direction_agreement.
+    var WIND_AGREE_SOFT = 0.4;
+    var WIND_AGREE_MID = 0.7;
+
+    function arrowIcon(fromDeg, speed, agreement) {
+        // + 180: from-direction to the direction of travel.
+        var rot = (fromDeg + 180) % 360;
+
+        // Longer shaft for stronger wind, but bounded — this is a direction
+        // layer, and the speed layer states the number properly.
+        var len = Math.max(11, Math.min(22, 11 + (speed || 0) * 0.55));
+        var half = len / 2;
+
+        var cls = 'warrow';
+        if (agreement != null) {
+            if (agreement < WIND_AGREE_SOFT) cls += ' wa-soft';
+            else if (agreement < WIND_AGREE_MID) cls += ' wa-mid';
+        }
+
+        var svg =
+            '<svg width="30" height="30" viewBox="-15 -15 30 30" ' +
+            'style="transform:rotate(' + rot.toFixed(0) + 'deg)">' +
+            '<path d="M0,' + half.toFixed(1) + ' L0,' + (-half).toFixed(1) + '"/>' +
+            '<path class="wa-head" d="M0,' + (-half).toFixed(1) +
+            ' L-3.2,' + (-half + 4.6).toFixed(1) +
+            ' L3.2,' + (-half + 4.6).toFixed(1) + ' Z"/>' +
+            '</svg>';
+
+        return L.divIcon({
+            className: cls,
+            iconSize: [30, 30],
+            iconAnchor: [15, 15],
+            html: svg
+        });
+    }
+
+    function renderWind() {
+        windLayer.clearLayers();
+        if (!windOn || !curGridPoints || !curGridPoints.length) return;
+
+        /* Grid runs made before wind direction was collected carry nulls, as
+           will any run where the ensemble declined to report it. Toggling
+           the layer on and getting a silently empty map reads as a broken
+           button, so say which it is. */
+        var haveAny = false;
+        for (var k = 0; k < curGridPoints.length; k++) {
+            if (curGridPoints[k][8] != null) { haveAny = true; break; }
+        }
+        var btn = document.getElementById('windtoggle');
+        btn.title = haveAny
+            ? 'Wind direction arrows'
+            : 'No wind direction in this grid run — it predates the layer';
+        btn.classList.toggle('pill-empty', !haveAny);
+        if (!haveAny) return;
+
+        var seen = {};
+        var zoom = map.getZoom();
+
+        for (var i = 0; i < curGridPoints.length; i++) {
+            var pt = curGridPoints[i];
+            var dir = pt[8];
+            if (dir == null) continue;
+
+            var latlng = L.latLng(pt[0], pt[1]);
+
+            // Thin on the projected pixel grid rather than on latitude and
+            // longitude: a degree of longitude is much narrower in the north,
+            // so a lat/lon stride would crowd Scotland and thin the Channel.
+            var p = map.project(latlng, zoom);
+            var cell = Math.round(p.x / WIND_MIN_SPACING) + ':' +
+                       Math.round(p.y / WIND_MIN_SPACING);
+            if (seen[cell]) continue;
+            seen[cell] = true;
+
+            windLayer.addLayer(L.marker(latlng, {
+                icon: arrowIcon(dir, pt[3], pt[9]),
+                interactive: false,
+                keyboard: false
+            }));
+        }
+    }
+
+    function setWind(on) {
+        windOn = on;
+        var btn = document.getElementById('windtoggle');
+        btn.classList.toggle('on', on);
+        if (on) {
+            map.addLayer(windLayer);
+            renderWind();
+        } else {
+            map.removeLayer(windLayer);
+            windLayer.clearLayers();
+        }
+        try { localStorage.setItem('orcamet.map.wind', on ? '1' : '0'); } catch (e) {}
+    }
+
+    document.getElementById('windtoggle').addEventListener('click', function() {
+        setWind(!windOn);
+    });
+
+    // Thinning is zoom-dependent, so the arrows are rebuilt when the view
+    // settles rather than left at the density of whatever zoom drew them.
+    map.on('zoomend moveend', function() {
+        if (windOn) renderWind();
+    });
+
     var $hovertip  = document.getElementById('hovertip');
     var $hovertipV = document.getElementById('hovertip-v');
     var $hovertipL = document.getElementById('hovertip-l');
@@ -853,7 +1014,15 @@ function contourUrl(timestamp, varName) {
             $hovertip.style.display = 'none';
             return;
         }
-        $hovertipV.textContent = v.toFixed(1) + f.unit;
+        var readout = v.toFixed(1) + f.unit;
+
+        // On the wind layers, the direction belongs with the speed: 18 m/s
+        // means something different depending on which face it is hitting.
+        if ((curVar === 'wind' || curVar === 'gust') && pt[8] != null) {
+            readout += ' ' + compassOf(pt[8]);
+        }
+
+        $hovertipV.textContent = readout;
         $hovertipL.textContent = f.label;
         $hovertip.style.left = e.containerPoint.x + 'px';
         $hovertip.style.top = e.containerPoint.y + 'px';
@@ -891,6 +1060,15 @@ function contourUrl(timestamp, varName) {
     }
 
     renderLgnd();
+
+    // Remember the arrow toggle per browser. Someone who works off wind
+    // direction wants it on every time, and it is a view preference, not
+    // shared state — localStorage is the right scope, and a browser that
+    // refuses it just starts with the arrows off.
+    try {
+        if (localStorage.getItem('orcamet.map.wind') === '1') setWind(true);
+    } catch (e) {}
+
     var $fill = document.getElementById('mfill');
     var $txt  = document.getElementById('mtxt');
 
