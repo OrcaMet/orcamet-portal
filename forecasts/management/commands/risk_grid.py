@@ -233,12 +233,17 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
-            "--contour-vars", type=str, default="pcancel,wind,gust,precip,temp",
+            "--contour-vars", type=str, default="none",
             help=(
-                "Comma-separated variables to pre-render contour overlays for "
-                "(default: pcancel,wind,gust,precip,temp — all map tabs). Use "
-                "'none' to skip rendering. Each variable adds one PNG per "
-                "forecast hour to the database."
+                "Comma-separated variables to pre-render contour overlays "
+                "for, or 'none' (the default). The map paints its own field "
+                "in the browser from the grid point values, so these images "
+                "are no longer served to anyone — they cost a matplotlib "
+                "render per variable per forecast hour and tens of megabytes "
+                "of database per run. Kept because it is the only way to get "
+                "a contour PNG out of this pipeline for a report or a "
+                "briefing, and because it is the fallback if the client-side "
+                "renderer ever has to be backed out."
             ),
         )
         parser.add_argument(

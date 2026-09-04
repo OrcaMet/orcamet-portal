@@ -207,8 +207,10 @@
 {{ map_thresholds|json_script:"map-thresholds" }}
 {{ basemap_url|json_script:"basemap-url" }}
 {{ map_legend|json_script:"map-legend" }}
+{{ map_colours|json_script:"map-colours" }}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="{% static 'orcamet_portal/js/field-renderer.js' %}"></script>
 <script>
 (function(){
     'use strict';
@@ -231,13 +233,13 @@
        ================================================================ */
     var SITE_URL   = '{% url "dashboard:map_sites_json" %}';
     var HOUR_URL   = '{% url "dashboard:map_sites_hourly_json" %}';
-    var CONTOUR_URL= '{% url "dashboard:map_contour_image" %}';
     var TS_URL     = '{% url "dashboard:map_contour_timestamps" %}';
     var GRID_URL   = '{% url "dashboard:map_grid_points_json" %}';
 
-    var UK_BOUNDS = [[49.9, -7.6], [58.7, 1.8]];
-    var IMAGE_TIMEOUT = 15000;
-    var PRELOAD_AHEAD = 6;
+    // How many frames of grid points to fetch ahead of the cursor. These
+    // are small JSON payloads and immutable once fetched, so playback runs
+    // from memory rather than a request per step.
+    var PREFETCH_AHEAD = 6;
     // Nearest-point hover cutoff, in degrees. Grid spacing is ~0.5°, so
     // anything closer than this is "on" the grid; farther means the
     // cursor is over open sea or outside the UK bounding box entirely.
@@ -364,42 +366,140 @@
         maxZoom: 20
     }).addTo(map);
 
-    var contourLayer = null;
-    var imageCache = {};
     var gridRunKey = '';
-    var hasServerCache = false;
-    var contourAvailable = true;
 
-function contourUrl(timestamp, varName) {
-        var url = CONTOUR_URL + '?var=' + varName;
-        if (timestamp) {
-            url += '&timestamp=' + encodeURIComponent(timestamp);
-        }
-        if (gridRunKey) {
-            url += '&run=' + encodeURIComponent(gridRunKey);
-        }
-        return url;
-    }
+    /* ================================================================
+       THE FIELD LAYER
 
-    function preloadImage(url) {
-        if (imageCache[url]) return;
-        imageCache[url] = 'loading';
-        var img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = function() { imageCache[url] = img; };
-        img.onerror = function() { imageCache[url] = null; };
-        img.src = url;
-    }
+       The coloured field is painted here, in the browser, from the same
+       grid point values the hover readout reads. It used to be a PNG per
+       variable per forecast hour, rendered by matplotlib in the cron and
+       stored in the database — 5 x 72 images a run, a round trip per frame,
+       and a whole class of bug from placing an equirectangular image into a
+       Web Mercator map.
 
-    function preloadAhead(idx, varName) {
-        for (var i = 1; i <= PRELOAD_AHEAD; i++) {
-            var fi = idx + i;
-            if (fi >= gridTimestamps.length) fi -= gridTimestamps.length;
-            if (fi < gridTimestamps.length) {
-                preloadImage(contourUrl(gridTimestamps[fi], varName));
+       Painting in the map's own coordinates makes that class of bug
+       impossible: there is no second projection to keep in step. It also
+       means switching variables is instant, and the timeline scrubs without
+       fetching an image per step.
+
+       See orcamet_portal/static/orcamet_portal/js/field-renderer.js for the
+       sampling and colouring, including the two properties carried over
+       from the server renderer: gaps are never painted across, and the
+       surface cannot exceed the values it was built from.
+       ================================================================ */
+    var RAMPS = JSON.parse(document.getElementById('map-colours').textContent);
+
+    var FieldLayer = L.Layer.extend({
+        onAdd: function(m) {
+            this._map = m;
+            this._canvas = L.DomUtil.create('canvas', 'omet-field');
+            this._canvas.style.pointerEvents = 'none';
+            this._ctx = this._canvas.getContext('2d');
+            m.getPanes().overlayPane.appendChild(this._canvas);
+            m.on('moveend zoomend resize', this.redraw, this);
+            this.redraw();
+        },
+
+        onRemove: function(m) {
+            m.off('moveend zoomend resize', this.redraw, this);
+            L.DomUtil.remove(this._canvas);
+        },
+
+        setField: function(grid, spec) {
+            this._grid = grid;
+            this._spec = spec;
+            this.redraw();
+        },
+
+        clear: function() {
+            this._grid = null;
+            if (this._ctx && this._canvas) {
+                this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
             }
+        },
+
+        redraw: function() {
+            if (!this._map || !this._canvas) return;
+
+            var m = this._map;
+            var size = m.getSize();
+
+            // The map sits in a flex column, so the very first redraw can
+            // land before the container has been given a size. There is
+            // nothing to draw yet; the resize handler brings us back.
+            if (!size.x || !size.y) return;
+
+            // The canvas covers the viewport and is repositioned into layer
+            // space, so panning does not require a repaint until it settles.
+            L.DomUtil.setPosition(this._canvas, m.containerPointToLayerPoint([0, 0]));
+            this._canvas.width = size.x;
+            this._canvas.height = size.y;
+
+            if (!this._grid || !this._spec) return;
+
+            /* Longitude depends only on x and latitude only on y in any
+               cylindrical projection, so the whole viewport needs width +
+               height projections rather than width x height of them. */
+            var latRow = new Float64Array(size.y);
+            var lonCol = new Float64Array(size.x);
+            var yy, xx;
+            for (yy = 0; yy < size.y; yy++) {
+                latRow[yy] = m.containerPointToLatLng([0, yy]).lat;
+            }
+            for (xx = 0; xx < size.x; xx++) {
+                lonCol[xx] = m.containerPointToLatLng([xx, 0]).lng;
+            }
+
+            OrcaMetField.paint(
+                this._ctx, size.x, size.y, this._grid, this._spec,
+                latRow, lonCol, FIELD_OPACITY
+            );
         }
+    });
+
+    // Matches the opacity the image overlay was drawn at, so the map reads
+    // exactly as it did before against the same basemap.
+    var FIELD_OPACITY = 0.55;
+
+    var fieldLayer = new FieldLayer();
+    map.addLayer(fieldLayer);
+
+    // Which column of a grid-points row each variable reads.
+    var VALUE_INDEX = {
+        pcancel: 7, wind: 3, gust: 4, precip: 5, temp: 6, risk: 2
+    };
+
+    function paintField() {
+        var spec = RAMPS[curVar];
+        if (!spec || !curGridPoints || !curGridPoints.length) {
+            fieldLayer.clear();
+            return;
+        }
+
+        var grid = OrcaMetField.buildLattice(curGridPoints, VALUE_INDEX[curVar]);
+        if (!grid) {
+            fieldLayer.clear();
+            return;
+        }
+
+        try {
+            fieldLayer.setField(grid, spec);
+        } catch (e) {
+            // The field is one layer of several. A fault drawing it must not
+            // take the markers, the timeline or the hover readout with it —
+            // which is exactly what happened when a zero-sized canvas threw
+            // into the boot promise chain.
+            console.warn('field paint failed:', e);
+            fieldLayer.clear();
+        }
+        lastCoverage = grid.coverage;
     }
+
+    // Share of the intended lattice the current frame actually carries.
+    // Surfaced in the status line: a run that lost a third of its points is
+    // worth saying out loud rather than leaving as unexplained blank sea.
+    var lastCoverage = null;
 
     var gridPointsCache = {};
     var curGridPoints = null;
@@ -409,87 +509,47 @@ function contourUrl(timestamp, varName) {
        timeline left the previous hour's arrows over the new hour's contour. */
     function useGridPoints(pts) {
         curGridPoints = pts;
+        paintField();
         if (windOn) renderWind();
     }
 
-    function fetchGridPoints(timestamp) {
+    /* quiet: fetch and cache without adopting the result as the current
+       frame. Used to run ahead of the cursor during playback — a prefetch
+       that repainted would fight the frame the user is looking at. */
+    function fetchGridPoints(timestamp, quiet) {
         var key = timestamp || '';
-        if (gridPointsCache[key]) {
-            if (gridPointsCache[key].then) {
-                gridPointsCache[key].then(useGridPoints);
-            } else {
-                useGridPoints(gridPointsCache[key]);
+        var cached = gridPointsCache[key];
+
+        if (cached) {
+            if (cached.then) {
+                return quiet ? cached : cached.then(function(pts) {
+                    useGridPoints(pts);
+                    return pts;
+                });
             }
-            return;
+            if (!quiet) useGridPoints(cached);
+            return Promise.resolve(cached);
         }
+
         var url = GRID_URL + '?run=' + encodeURIComponent(gridRunKey) +
             (timestamp ? '&timestamp=' + encodeURIComponent(timestamp) : '');
+
         var req = fetchWithTimeout(url, 10000).then(function(d) {
             var pts = d.points || [];
             gridPointsCache[key] = pts;
-            useGridPoints(pts);
+            // Only adopt it if this is still the frame being shown: a slow
+            // response for hour 3 must not overwrite hour 9 the user has
+            // since scrubbed to.
+            if (!quiet && currentTimestamp() === timestamp) useGridPoints(pts);
             return pts;
         }).catch(function(e) {
             console.warn('grid-points:', e);
             gridPointsCache[key] = [];
             return [];
         });
+
         gridPointsCache[key] = req;
-    }
-
-    function setContourOverlay(url) {
-        if (contourLayer) {
-            map.removeLayer(contourLayer);
-        }
-        contourLayer = L.imageOverlay(url, UK_BOUNDS, {
-            opacity: 0.55,
-            interactive: false,
-            zIndex: 200,
-        });
-        contourLayer.addTo(map);
-    }
-
-    function loadContourImage(timestamp, varName) {
-        if (!contourAvailable) return Promise.resolve();
-
-        var url = contourUrl(timestamp, varName);
-        var cached = imageCache[url];
-
-        if (cached && typeof cached === 'object' && cached.complete) {
-            setContourOverlay(url);
-            return Promise.resolve();
-        }
-
-        return new Promise(function(resolve) {
-            var resolved = false;
-
-            function finish() {
-                if (resolved) return;
-                resolved = true;
-                resolve();
-            }
-
-            var timer = setTimeout(function() {
-                console.warn('Contour image timed out (' + IMAGE_TIMEOUT + 'ms):', url);
-                finish();
-            }, IMAGE_TIMEOUT);
-
-            var img = new Image();
-            img.crossOrigin = 'anonymous';
-            img.onload = function() {
-                clearTimeout(timer);
-                imageCache[url] = img;
-                setContourOverlay(url);
-                finish();
-            };
-            img.onerror = function() {
-                clearTimeout(timer);
-                console.warn('Contour load failed:', url);
-                imageCache[url] = null;
-                finish();
-            };
-            img.src = url;
-        });
+        return req;
     }
 
     var siteCluster = L.markerClusterGroup({
@@ -628,13 +688,11 @@ function contourUrl(timestamp, varName) {
             .then(function(d) {
                 if (d.available) {
                     gridTimestamps = d.timestamps || [];
-                    hasServerCache = d.has_cache || false;
                     gridRunKey = d.run_key || d.generated_at || '';
                     var models = d.models_used || [];
                     var statusParts = [d.grid_points + ' pts'];
                     if (models.length) statusParts.push(models.length + ' models');
                     statusParts.push(gridTimestamps.length + 'h');
-                    if (hasServerCache) statusParts.push('cached');
                     document.getElementById('gstatus').textContent = statusParts.join(' · ');
                 }
             })
@@ -771,15 +829,21 @@ function contourUrl(timestamp, varName) {
         $bhour.textContent = TIME_FMT.format(d);
         $rng.value = curIdx;
 
-        loadContourImage(ts, curVar);
-        preloadAhead(curIdx, curVar);
         fetchGridPoints(ts);
+        prefetchAhead(curIdx);
         renderSites(ts);
 
         // After renderSites, which decides whether the site forecasts reach
         // this hour.
+        var note = siteHourNote;
+        // A run that lost points to the rate limiter leaves blank sea that
+        // otherwise looks like a rendering failure. Name it.
+        if (lastCoverage != null && lastCoverage < 0.95) {
+            var pct = Math.round(lastCoverage * 100);
+            note = note ? note + ' · ' + pct + '% grid' : pct + '% grid coverage';
+        }
         $bsub.textContent = 'Hour ' + (curIdx + 1) + '/' + gridTimestamps.length +
-            (siteHourNote ? ' · ' + siteHourNote : '');
+            (note ? ' · ' + note : '');
     }
 
     function renderLgnd() {
@@ -845,16 +909,20 @@ function contourUrl(timestamp, varName) {
             document.querySelectorAll('.pill').forEach(function(b) { b.classList.remove('on'); });
             this.classList.add('on');
             curVar = this.dataset.v;
-            imageCache = {};
             renderLgnd();
+            // The values for this hour are already in memory; switching
+            // variable is a repaint, not a fetch.
+            paintField();
             renderFrame(curIdx);
         });
     });
 
-    function preloadAllFrames(varName) {
-        gridTimestamps.forEach(function(ts) {
-            preloadImage(contourUrl(ts, varName));
-        });
+    function prefetchAhead(idx) {
+        for (var i = 1; i <= PREFETCH_AHEAD; i++) {
+            var next = idx + i;
+            if (next >= gridTimestamps.length) break;
+            fetchGridPoints(gridTimestamps[next], true);
+        }
     }
 
     /* ================================================================
@@ -1094,12 +1162,13 @@ function contourUrl(timestamp, varName) {
         loadHourly()
     ]).then(function() {
         $fill.style.width = '60%';
-        $txt.textContent = 'Rendering contour map…';
+        $txt.textContent = 'Loading grid values…';
 
         if (gridTimestamps.length) {
             $rng.max = gridTimestamps.length - 1;
             $rng.value = 0;
-            return loadContourImage(gridTimestamps[0], curVar);
+            // One frame of values is all the first paint needs.
+            return fetchGridPoints(gridTimestamps[0]);
         }
     }).then(function() {
         clearTimeout(bootTimeout);
@@ -1108,17 +1177,11 @@ function contourUrl(timestamp, varName) {
             document.getElementById('gstatus').textContent =
                 'No UK risk grid available — showing site markers only';
         } else {
-            var statusParts = [gridTimestamps.length + ' hours loaded'];
-            if (hasServerCache) statusParts.push('(cached — instant playback)');
-            document.getElementById('gstatus').textContent = statusParts.join(' ');
+            document.getElementById('gstatus').textContent =
+                gridTimestamps.length + ' hours loaded';
         }
 
         renderFrame(0);
-
-        if (hasServerCache && gridTimestamps.length) {
-            preloadAllFrames(curVar);
-        }
-
         fitToSites();
 
         dismissLoading();
