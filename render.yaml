@@ -108,7 +108,16 @@ services:
     plan: starter
     name: orcamet-portal_risk_grid
     runtime: python
-    schedule: "0 */6 * * *"
+    # Offset from the per-site run above, which is on the hour. Both were on
+    # "0 */6 * * *" and started together, competing for the same Open-Meteo
+    # minutely quota — and risk_grid is the ~12 minute job that loses that
+    # race, backing its pacing off and deferring batches, which is how whole
+    # latitude bands went missing from the map. The site run is short, so
+    # half an hour is ample clearance.
+    #
+    # As with the schedule above, this must also be changed in the Render
+    # dashboard to take effect.
+    schedule: "30 */6 * * *"
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python manage.py risk_grid"
     envVars:
