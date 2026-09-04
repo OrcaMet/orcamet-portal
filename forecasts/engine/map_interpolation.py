@@ -209,6 +209,57 @@ def interpolate_risk_surface(lats, lons, values, resolution=INTERP_RESOLUTION,
 
 
 # ============================================================
+# PNG COMPRESSION
+# ============================================================
+
+# Palette entries to quantise down to. A filled contour is a handful of flat
+# bands, so 255 is far more than the image needs; dropping to 128 saves under
+# 1% more, which is not worth the extra banding risk on the smooth variables.
+PALETTE_COLOURS = 255
+
+
+def _to_palette_png(png_bytes: bytes) -> bytes:
+    """
+    Re-encode a 24-bit RGBA contour PNG as an 8-bit palette PNG.
+
+    Every frame is stored in the database as a BinaryField, five variables
+    per forecast hour, several runs live at once — so frame size is the
+    dominant term in what the grid costs to keep. A filled contour uses very
+    few distinct colours, and paying 32 bits per pixel to store 51 bands is
+    most of that cost.
+
+    FASTOCTREE quantises RGBA directly and carries per-entry alpha through to
+    the PNG's tRNS chunk, so the antialiased edges and the blanked voids
+    survive — unlike a palette built from RGB alone, which would flatten
+    transparency to on/off. Measured across pcancel, wind, precip and temp on
+    a smooth field: 473 KB down to 100 KB, 21% of the original, with a worst
+    channel difference of 20/255 and a mean of 1.9 on a layer the map then
+    draws at 55% opacity.
+
+    Never fatal and never larger: a failure or a counterproductive result
+    returns the original bytes, because a slightly bigger map is worth far
+    more than no map.
+    """
+    try:
+        from PIL import Image  # a matplotlib dependency; already installed
+
+        with Image.open(io.BytesIO(png_bytes)) as im:
+            quantised = im.convert("RGBA").quantize(
+                colors=PALETTE_COLOURS, method=Image.FASTOCTREE
+            )
+            out = io.BytesIO()
+            quantised.save(out, format="PNG", optimize=True)
+        compressed = out.getvalue()
+    except Exception as e:
+        logger.warning("PNG palette compression failed, storing full colour: %s", e)
+        return png_bytes
+
+    if len(compressed) >= len(png_bytes):
+        return png_bytes
+    return compressed
+
+
+# ============================================================
 # CONTOUR RENDERING (transparent PNG for L.imageOverlay)
 # ============================================================
 
@@ -321,4 +372,4 @@ def render_contour_to_bytes(
     gc.collect()
 
     buf.seek(0)
-    return buf.getvalue()
+    return _to_palette_png(buf.getvalue())
