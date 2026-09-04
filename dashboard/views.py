@@ -12,7 +12,9 @@ from urllib.parse import quote
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.db.models import Max
-from django.http import Http404, HttpResponse, JsonResponse
+from django.http import (
+    Http404, HttpResponse, HttpResponseNotModified, JsonResponse,
+)
 from django.shortcuts import render, get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -79,6 +81,47 @@ def _annotate_cancellation(run):
         for key, share in causes
         if share > 0
     )
+
+
+# ============================================================
+# FRAME CACHING
+# ============================================================
+#
+# A map frame addressed by run key, variable and hour can never change: a
+# grid run's rows are written once and a new run gets a new key. Serving
+# those with no caching headers at all meant every frame of a 72-hour
+# playback was a fresh database round trip pulling a BLOB through a worker,
+# repeated for every viewer and again every time the variable tabs were
+# switched.
+#
+# Frames reached by falling back — no run key, or an hour with no exact
+# match — are not immutable, because "the latest run" changes under the
+# client. Those get a short window instead.
+#
+# `private` rather than `public`: the payload is UK-wide and not specific to
+# the user, but it is served from a login-gated URL, and a shared proxy
+# holding responses to authenticated requests is not a trade worth making
+# for a cache that only needs to be per-browser.
+IMMUTABLE_MAX_AGE = 60 * 60 * 24 * 30   # 30 days — outlives any run
+FALLBACK_MAX_AGE = 60                    # 1 minute
+
+
+def _frame_etag(prefix, ident, variable, timestamp):
+    """A stable identifier for one immutable frame."""
+    stamp = int(timestamp.timestamp()) if timestamp else 0
+    return f'"{prefix}{ident}-{variable}-{stamp}"'
+
+
+def _cache_frame(response, etag, immutable):
+    """Attach validation and freshness headers to a frame response."""
+    response["ETag"] = etag
+    if immutable:
+        response["Cache-Control"] = (
+            f"private, max-age={IMMUTABLE_MAX_AGE}, immutable"
+        )
+    else:
+        response["Cache-Control"] = f"private, max-age={FALLBACK_MAX_AGE}"
+    return response
 
 
 # CARTO serves these tiles unauthenticated, but stamps every one with
@@ -394,6 +437,8 @@ def map_contour_image(request):
             pk=int(run_key), status=UKRiskGridRun.Status.SUCCESS
         ).first()
 
+    pinned_run = run is not None
+
     if run is None:
         run = UKRiskGridRun.objects.filter(
             status=UKRiskGridRun.Status.SUCCESS
@@ -403,20 +448,48 @@ def map_contour_image(request):
         raise Http404("No grid run available")
 
     images = CachedContourImage.objects.filter(run=run, variable=var_name)
-    image = None
+
+    # Identify the frame before fetching it. The PNG is a BLOB on the row,
+    # so selecting the whole row to decide whether the client already has it
+    # would pull the very bytes a 304 exists to avoid sending.
+    row = None
+    exact = False
 
     if timestamp:
         parsed = parse_datetime(timestamp)
         if parsed:
-            image = images.filter(timestamp=parsed).first()
+            row = images.filter(timestamp=parsed).values_list("id", "timestamp").first()
+            exact = row is not None
 
-    if not image:
-        image = images.order_by("timestamp").first()
+    if row is None:
+        row = images.order_by("timestamp").values_list("id", "timestamp").first()
 
-    if not image:
+    if row is None:
         raise Http404("No contour image available")
 
-    return HttpResponse(bytes(image.image_data), content_type="image/png")
+    image_id, image_ts = row
+    etag = _frame_etag("c", image_id, var_name, image_ts)
+
+    # Immutable only when the client named both the run and the hour and got
+    # exactly them. A frame reached by falling back to "the latest run" or
+    # "the first hour" is a moving target and must not be cached for long.
+    immutable = pinned_run and exact
+
+    if request.headers.get("If-None-Match") == etag:
+        return _cache_frame(HttpResponseNotModified(), etag, immutable)
+
+    data = (
+        CachedContourImage.objects
+        .filter(pk=image_id)
+        .values_list("image_data", flat=True)
+        .first()
+    )
+    if data is None:
+        raise Http404("No contour image available")
+
+    return _cache_frame(
+        HttpResponse(bytes(data), content_type="image/png"), etag, immutable
+    )
 
 
 @login_required(login_url="/login/")
@@ -435,6 +508,9 @@ def map_grid_points_json(request):
         run = UKRiskGridRun.objects.filter(
             pk=int(run_key), status=UKRiskGridRun.Status.SUCCESS
         ).first()
+
+    pinned_run = run is not None
+
     if run is None:
         run = UKRiskGridRun.objects.filter(
             status=UKRiskGridRun.Status.SUCCESS
@@ -448,9 +524,19 @@ def map_grid_points_json(request):
     parsed = parse_datetime(timestamp) if timestamp else None
     if parsed:
         points_qs = points_qs.filter(timestamp=parsed)
+        frame_ts = parsed
     else:
         first_ts = points_qs.order_by("timestamp").values_list("timestamp", flat=True).first()
         points_qs = points_qs.filter(timestamp=first_ts) if first_ts else points_qs.none()
+        frame_ts = first_ts
+
+    # Same reasoning as the contour frames: a run's points are written once,
+    # so a fully addressed frame can be revalidated instead of rebuilt.
+    etag = _frame_etag("g", run.pk, "points", frame_ts)
+    immutable = pinned_run and parsed is not None
+
+    if request.headers.get("If-None-Match") == etag:
+        return _cache_frame(HttpResponseNotModified(), etag, immutable)
 
     # Flat arrays instead of objects — this list is a few hundred entries
     # fetched once per frame, so the key-name overhead of a dict per point
@@ -461,7 +547,7 @@ def map_grid_points_json(request):
         for p in points_qs
     ]
 
-    return JsonResponse({"points": points})
+    return _cache_frame(JsonResponse({"points": points}), etag, immutable)
 
 
 @login_required(login_url="/login/")
@@ -470,9 +556,18 @@ def map_contour_timestamps(request):
     run = UKRiskGridRun.objects.filter(status=UKRiskGridRun.Status.SUCCESS).order_by("-generated_at").first()
 
     if not run:
-        return JsonResponse({"available": False, "timestamps": [], "has_cache": False})
+        response = JsonResponse({"available": False, "timestamps": [], "has_cache": False})
+        response["Cache-Control"] = "no-store"
+        return response
 
     timestamps = list(UKRiskGridPoint.objects.filter(run=run).values_list("timestamp", flat=True).distinct().order_by("timestamp"))
     has_cache = CachedContourImage.objects.filter(run=run).exists()
 
-    return JsonResponse({"available": True, "timestamps": [t.isoformat() for t in timestamps], "has_cache": has_cache, "models_used": run.models_used, "grid_points": run.grid_points, "run_key": str(run.id), "generated_at": run.generated_at.isoformat()})
+    response = JsonResponse({"available": True, "timestamps": [t.isoformat() for t in timestamps], "has_cache": has_cache, "models_used": run.models_used, "grid_points": run.grid_points, "run_key": str(run.id), "generated_at": run.generated_at.isoformat()})
+
+    # Deliberately not cached like the frames are. This is the discovery
+    # document that hands the client its run key, and it is what tells a
+    # long-open map that a new grid run exists. Caching it would pin the
+    # session to a stale run and defeat the frame keys entirely.
+    response["Cache-Control"] = "no-store"
+    return response
