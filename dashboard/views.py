@@ -21,6 +21,7 @@ from django.utils.dateparse import parse_datetime
 
 from forecasts.models import ForecastRun, HourlyForecast, UKRiskGridRun, UKRiskGridPoint, CachedContourImage, MapThresholds
 from sites.models import Site, ThresholdProfile
+from dashboard.map_colours import colour_ramps
 from dashboard.map_legend import legend_data
 
 
@@ -307,6 +308,10 @@ def weather_map(request):
     # with. The template used to carry its own table, which had drifted: the
     # wind key showed green at 7 m/s where YlOrRd is pale yellow.
     context["map_legend"] = legend_data()
+
+    # The colour ramps the browser paints the field with. Same colormaps the
+    # server renderer used, so a colour keeps meaning what it always meant.
+    context["map_colours"] = colour_ramps()
 
     return render(request, "dashboard/weather_map.html", context)
 

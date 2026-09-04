@@ -256,8 +256,15 @@ class SiteFrameLookupTests(TestCase):
 
     def test_the_gap_is_stated_on_screen(self):
         """The note has to reach the user, not just the marker icons."""
-        idx = self.source.find("siteHourNote ? ")
-        self.assertNotEqual(idx, -1, "siteHourNote never reaches the time bar")
+        idx = self.source.find("$bsub.textContent = 'Hour '")
+        self.assertNotEqual(idx, -1, "the time bar no longer states the hour")
+
+        # The note is assembled just above that assignment and interpolated
+        # into it. Grid coverage now shares the same slot, so match the
+        # assembly rather than one particular ternary.
+        block = self.source[max(0, idx - 800):idx + 200]
+        self.assertIn("siteHourNote", block)
+        self.assertIn("note ? ", block)
 
     def test_the_summary_fallback_survives(self):
         """With no timeline at all, the daily summary is still shown."""
