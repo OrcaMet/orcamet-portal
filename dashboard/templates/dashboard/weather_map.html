@@ -193,6 +193,7 @@
 {% block extra_scripts %}
 {{ map_thresholds|json_script:"map-thresholds" }}
 {{ basemap_url|json_script:"basemap-url" }}
+{{ map_legend|json_script:"map-legend" }}
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script>
@@ -234,6 +235,22 @@
     // marker popups silently disagreed with the contour layer after any edit.
     var TH = JSON.parse(document.getElementById('map-thresholds').textContent);
 
+    /* Every scoring function takes the threshold set to score against. A
+       site's own limits are used where it has an active ThresholdProfile,
+       falling back to the UK-wide MapThresholds row otherwise.
+
+       The map used to gate every marker against that one global row, so a
+       sheltered site and an exposed one got identical verdicts on identical
+       weather — the exposure line in the popup said they differed while the
+       colour said they did not, and a client who had carefully set their own
+       limits in the admin saw none of it on the map. */
+    var siteTH = {};
+
+    function thresholdsFor(siteId) {
+        var own = siteTH[String(siteId)];
+        return own || TH;
+    }
+
     function ramp(v,s,h,hb){
         if(hb){if(v<=s)return 0;if(v>=h)return 1;return(v-s)/(h-s);}
         else{if(v>=s)return 0;if(v<=h)return 1;return(s-v)/(s-h);}
@@ -242,17 +259,18 @@
 
     // Two-sided, mirroring core.temperature_ramp(): cold and heat share the
     // single temperature weight, and blank heat thresholds mean cold only.
-    function tempRamp(t){
-        var cold = ramp(t, TH.temp_min_caution, TH.temp_min_cancel, 0);
-        if (TH.temp_max_caution == null || TH.temp_max_cancel == null) return cold;
-        return Math.max(cold, ramp(t, TH.temp_max_caution, TH.temp_max_cancel, 1));
+    function tempRamp(t, th){
+        var cold = ramp(t, th.temp_min_caution, th.temp_min_cancel, 0);
+        if (th.temp_max_caution == null || th.temp_max_cancel == null) return cold;
+        return Math.max(cold, ramp(t, th.temp_max_caution, th.temp_max_cancel, 1));
     }
 
-    function cRisk(w,g,p,t){
-        var r = .30*ramp(w, TH.wind_mean_caution, TH.wind_mean_cancel, 1)
-              + .40*ramp(g, TH.gust_caution, TH.gust_cancel, 1)
-              + .20*ramp(p, TH.precip_caution, TH.precip_cancel, 1)
-              + .10*tempRamp(t);
+    function cRisk(w,g,p,t,th){
+        th = th || TH;
+        var r = .30*ramp(w, th.wind_mean_caution, th.wind_mean_cancel, 1)
+              + .40*ramp(g, th.gust_caution, th.gust_cancel, 1)
+              + .20*ramp(p, th.precip_caution, th.precip_cancel, 1)
+              + .10*tempRamp(t, th);
         return Math.min(100,Math.max(0,sig(6*(r-.45))*100));
     }
 
@@ -260,7 +278,8 @@
        above is kept only for ordering within a band — it cannot represent a
        breach, so it must not decide the band. Gusts carry 0.40 on a scale
        centred at 0.45, which capped them at CAUTION however extreme. */
-    function verdictOf(w,g,p,t){
+    function verdictOf(w,g,p,t,th){
+        th = th || TH;
         var worst = 'GO';
         function hit(level){
             if (level === 'CANCEL') worst = 'CANCEL';
@@ -271,28 +290,27 @@
             if (cancel != null && v >= cancel) hit('CANCEL');
             else if (caution != null && v >= caution) hit('CAUTION');
         }
-        gate(w, TH.wind_mean_caution, TH.wind_mean_cancel);
-        gate(g, TH.gust_caution, TH.gust_cancel);
-        gate(p, TH.precip_caution, TH.precip_cancel);
+        gate(w, th.wind_mean_caution, th.wind_mean_cancel);
+        gate(g, th.gust_caution, th.gust_cancel);
+        gate(p, th.precip_caution, th.precip_cancel);
 
         if (t != null && !isNaN(t)) {
-            if ((TH.temp_min_cancel != null && t <= TH.temp_min_cancel) ||
-                (TH.temp_max_cancel != null && t >= TH.temp_max_cancel)) hit('CANCEL');
-            else if ((TH.temp_min_caution != null && t <= TH.temp_min_caution) ||
-                     (TH.temp_max_caution != null && t >= TH.temp_max_caution)) hit('CAUTION');
+            if ((th.temp_min_cancel != null && t <= th.temp_min_cancel) ||
+                (th.temp_max_cancel != null && t >= th.temp_max_cancel)) hit('CANCEL');
+            else if ((th.temp_min_caution != null && t <= th.temp_min_caution) ||
+                     (th.temp_max_caution != null && t >= th.temp_max_caution)) hit('CAUTION');
         }
         return worst;
     }
 
     function recOf(r){return r<20?'GO':r<50?'CAUTION':'CANCEL';}
 
-    var SC={
-        pcancel:{t:'Chance of cancellation', s:[[0,[26,152,80],'0%'],[25,[166,217,106],'25%'],[50,[254,224,139],'50%'],[75,[244,109,67],'75%'],[100,[165,0,38],'100%']]},
-        wind:  {t:'Wind m/s',   s:[[0,[51,65,85],'0'],[7,[34,197,94],'7'],[10,[245,158,11],'10'],[25,[185,28,28],'25+']]},
-        gust:  {t:'Gusts m/s',  s:[[0,[51,65,85],'0'],[10,[34,197,94],'10'],[20,[239,68,68],'20'],[35,[185,28,28],'35+']]},
-        precip:{t:'Precip mm/h',s:[[0,[30,41,59],'0'],[0.5,[59,130,246],'0.5'],[3,[29,78,216],'3'],[8,[67,56,202],'8+']]},
-        temp:  {t:'Temp °C',    s:[[-5,[37,99,235],'-5'],[2,[147,197,253],'2'],[15,[251,191,36],'15'],[25,[239,68,68],'25+']]}
-    };
+    /* Legend colours are sampled from the same matplotlib colormaps the
+       contours are rendered with, server-side (dashboard/map_legend.py).
+       This table used to be written by hand here and had drifted from those
+       colormaps — the wind key showed green at 7 m/s where YlOrRd is pale
+       yellow — so the key described a map that was never drawn. */
+    var SC = JSON.parse(document.getElementById('map-legend').textContent);
 
     // Index into a grid-points row [lat, lon, risk, wind, gust, precip, temp]
     var FIELD_FOR_VAR = {
@@ -480,7 +498,18 @@ function contourUrl(timestamp, varName) {
         var bd = '';
 
         if (p.has_forecast) {
+            /* Chance of cancellation first: it is the quantity the default
+               contour layer draws, so the pin and the field beneath it now
+               read as the same measure. Peak risk stays as the severity
+               ranking it has always been, but no longer stands alone where
+               it could be mistaken for a probability. A null prints as an
+               em dash — never 0%, which reads as "certainly fine". */
+            var pc = p.p_cancel != null ? p.p_cancel + '%' : '—';
+            var cause = p.limiting_variable
+                ? '<span class="pp-sl"> (' + esc(p.limiting_variable) + ')</span>' : '';
+
             bd = '<div class="pp-gr">' +
+                '<div><span class="pp-sl">Cancellation</span><div class="pp-sv">' + pc + cause + '</div></div>' +
                 '<div><span class="pp-sl">Peak Risk</span><div class="pp-sv">' + fv(p.peak_risk,'%') + '</div></div>' +
                 '<div><span class="pp-sl">Peak Wind</span><div class="pp-sv">' + fv(p.peak_wind,' m/s') + '</div></div>' +
                 '<div><span class="pp-sl">Peak Gust</span><div class="pp-sv">' + fv(p.peak_gust,' m/s') + '</div></div>' +
@@ -505,8 +534,9 @@ function contourUrl(timestamp, varName) {
     }
 
     function popHr(p,ts){
-        var risk = cRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
-        var r = verdictOf(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature);
+        var th = thresholdsFor(p.id);
+        var risk = cRisk(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature, th);
+        var r = verdictOf(p.wind_speed,p.wind_gusts,p.precipitation,p.temperature, th);
         var d = new Date(ts);
         var tm = TIME_FMT.format(d);
         var dt = DATE_FMT.format(d);
@@ -514,7 +544,11 @@ function contourUrl(timestamp, varName) {
         return '<div class="pp-hd"><div><div class="pp-nm">' + esc(p.name) + '</div><div class="pp-sub">' + esc(p.client) + ' · ' + esc(p.postcode) + '</div></div>' +
             '<span class="pp-bg ' + bcls(r) + '">' + esc(r) + '</span></div>' +
             '<div class="pp-bd"><div class="pp-gr">' +
-            '<div><span class="pp-sl">Risk</span><div class="pp-sv">' + risk.toFixed(0) + '%</div></div>' +
+            /* "Risk score", not "Risk": this is the weighted severity index,
+               not a probability, and the contour under the pin may be the
+               chance of cancellation. Two different measures sharing the
+               word "risk" is how they got conflated. */
+            '<div><span class="pp-sl">Risk score</span><div class="pp-sv">' + risk.toFixed(0) + '</div></div>' +
             '<div><span class="pp-sl">Wind</span><div class="pp-sv">' + esc(p.wind_speed) + ' m/s</div></div>' +
             '<div><span class="pp-sl">Gusts</span><div class="pp-sv">' + esc(p.wind_gusts) + ' m/s</div></div>' +
             '<div><span class="pp-sl">Precip</span><div class="pp-sv">' + esc(p.precipitation) + ' mm</div></div>' +
@@ -610,7 +644,7 @@ function contourUrl(timestamp, varName) {
 
     function loadHourly() {
         return fetchWithTimeout(HOUR_URL, 15000)
-            .then(function(d) { hourlyD = d; indexHourly(); })
+            .then(function(d) { hourlyD = d; siteTH = d.thresholds || {}; indexHourly(); })
             .catch(function(e) { console.warn('hourly:', e); });
     }
 
@@ -676,7 +710,7 @@ function contourUrl(timestamp, varName) {
         frame.features.forEach(function(f) {
             var c = f.geometry.coordinates;
             var p = f.properties;
-            var rec = verdictOf(p.wind_speed, p.wind_gusts, p.precipitation, p.temperature);
+            var rec = verdictOf(p.wind_speed, p.wind_gusts, p.precipitation, p.temperature, thresholdsFor(p.id));
             var m = L.marker([c[1], c[0]], {icon: mkI(rec)});
             m.bindPopup(popHr(p, ts), {maxWidth: 290, minWidth: 230});
             siteCluster.addLayer(m);
