@@ -186,8 +186,26 @@ class GridPointsPayloadTests(TestCase):
         payload = self.client.get("/dashboard/map/grid-points.json").json()
         row = payload["points"][0]
 
-        self.assertEqual(len(row), 8)
         self.assertEqual(row[7], 37.5)
+
+    def test_every_column_holds_its_documented_position(self):
+        """
+        The contract is the position of each value, not the row length —
+        columns may be appended (wind direction was), but nothing may be
+        inserted ahead of one the template already reads by index.
+        """
+        payload = self.client.get("/dashboard/map/grid-points.json").json()
+        row = payload["points"][0]
+
+        self.assertEqual(row[0], 55.0)    # latitude
+        self.assertEqual(row[1], -3.0)    # longitude
+        self.assertEqual(row[2], 14.0)    # risk
+        self.assertEqual(row[3], 5.0)     # wind_speed
+        self.assertEqual(row[4], 9.0)     # wind_gusts
+        self.assertEqual(row[5], 0.2)     # precipitation
+        self.assertEqual(row[6], 11.0)    # temperature
+        self.assertEqual(row[7], 37.5)    # p_cancel
+        self.assertGreaterEqual(len(row), 8)
 
     def test_template_reads_cancellation_from_that_index(self):
         source = TEMPLATE.read_text(encoding="utf-8")

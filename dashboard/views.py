@@ -578,7 +578,10 @@ def map_grid_points_json(request):
     # adds up.
     points = [
         # Index 7 is p_cancel; the client's FIELD_FOR_VAR maps by position.
-        [p.latitude, p.longitude, _num(p.risk), _num(p.wind_speed), _num(p.wind_gusts), _num(p.precipitation), _num(p.temperature), _num(p.p_cancel)]
+        # Indexes 8 and 9 are wind direction and how much the members agreed
+        # on it — appended, never inserted, because that positional mapping
+        # is a contract with the template.
+        [p.latitude, p.longitude, _num(p.risk), _num(p.wind_speed), _num(p.wind_gusts), _num(p.precipitation), _num(p.temperature), _num(p.p_cancel), _num(p.wind_direction), _num(p.wind_direction_agreement)]
         for p in points_qs
     ]
 

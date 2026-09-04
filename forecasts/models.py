@@ -207,6 +207,26 @@ class UKRiskGridPoint(models.Model):
         help_text="Members backing p_cancel at this point",
     )
 
+    # Meteorological convention: the direction the wind comes FROM, in
+    # degrees clockwise from true north. 270 is a westerly.
+    #
+    # Averaged across members as a vector, never as an angle: the arithmetic
+    # mean of 350 and 10 is 180 — a southerly, the exact opposite of the
+    # northerly both members forecast.
+    wind_direction = models.FloatField(
+        null=True, blank=True,
+        help_text="Direction the wind comes FROM, degrees from true north",
+    )
+
+    # Length of the normalised resultant vector, 0-1. Near 1 the members
+    # agree on a direction; near 0 they disagree and the mean direction is
+    # close to meaningless. Stored so the map can fade an arrow it has no
+    # business drawing confidently, rather than drawing every arrow alike.
+    wind_direction_agreement = models.FloatField(
+        null=True, blank=True,
+        help_text="Member agreement on direction, 0 (none) to 1 (unanimous)",
+    )
+
     class Meta:
         ordering = ["timestamp", "latitude", "longitude"]
         indexes = [models.Index(fields=["run", "timestamp"], name="forecasts_u_run_id_3b3b76_idx")]
