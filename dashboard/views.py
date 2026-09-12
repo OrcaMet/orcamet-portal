@@ -15,7 +15,7 @@ from django.db.models import Max
 from django.http import (
     Http404, HttpResponse, HttpResponseNotModified, JsonResponse,
 )
-from django.shortcuts import render, get_object_or_404
+from django.shortcuts import redirect, render, get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -208,6 +208,19 @@ def home(request):
     Client users see only their client's sites.
     """
     user = request.user
+
+    # A workspace that manages its own sites and has not been through setup
+    # goes to the wizard instead of an empty dashboard. Only for admins:
+    # a read-only colleague cannot complete it, so sending them there would
+    # be a dead end. Skipping or finishing stamps onboarding_completed_at,
+    # which is what stops this firing again.
+    client = user.client
+    if (client is not None
+            and client.self_service_sites
+            and not client.onboarding_complete
+            and user.can_edit_thresholds):
+        return redirect("onboarding:start")
+
     sites_list = list(_visible_sites(user))
 
     # Latest run of any status, matching the previous behaviour.
@@ -220,10 +233,14 @@ def home(request):
 
     context = {"user": user, "sites": sites_list, "site_count": len(sites_list), "latest_forecast_at": max(generated_times) if generated_times else None, "alert_count": alert_count}
 
-    # Trial accounts manage their own sites, within a cap.
-    if user.is_sandbox_user:
-        context["sandbox_site_cap"] = settings.SANDBOX_MAX_SITES
-        context["sandbox_may_add"] = len(sites_list) < settings.SANDBOX_MAX_SITES
+    # Workspaces that manage their own sites get the add/import controls and
+    # their allowance. Staff-managed clients see neither, as before.
+    if client is not None and client.self_service_sites and user.can_edit_thresholds:
+        cap = client.effective_site_limit
+        context["self_service"] = True
+        context["site_cap"] = cap
+        context["may_add_site"] = len(sites_list) < cap
+        context["is_trial"] = client.is_sandbox
 
     return render(request, "dashboard/home.html", context)
 

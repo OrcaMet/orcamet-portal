@@ -11,7 +11,7 @@ from django.contrib.auth import login as django_login, logout as django_logout
 from urllib.parse import quote_plus, urlencode
 
 from .models import User
-from .provisioning import SESSION_KEY, lookup_invite, provision_sandbox_user
+from .provisioning import SESSION_KEY, lookup_invite, provision_user_from_invite
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ def callback_view(request):
         invite = lookup_invite(request.session.get(SESSION_KEY))
 
         if invite is not None and email and email_verified:
-            user = provision_sandbox_user(invite, auth0_id, email, name)
+            user = provision_user_from_invite(invite, auth0_id, email, name)
             request.session.pop(SESSION_KEY, None)
             if user is None:
                 # The invite was revoked or used up between the click and here.

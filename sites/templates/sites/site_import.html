@@ -1,0 +1,22 @@
+{% extends "orcamet_portal/base.html" %}
+
+{% block title %}Import sites — OrcaMet Portal{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="breadcrumb">
+        <a href="{% url 'dashboard:home' %}">Dashboard</a>
+        <span class="breadcrumb-sep">/</span>
+        <span>Import sites</span>
+    </div>
+
+    <div class="dashboard-header">
+        <h1>Import sites</h1>
+        <p class="dashboard-role">{{ client.name }}</p>
+    </div>
+
+    <div class="section">
+        {% include "sites/_import_form.html" %}
+    </div>
+</div>
+{% endblock %}

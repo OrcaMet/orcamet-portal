@@ -42,7 +42,15 @@ class InviteAdminTests(TestCase):
     def test_creating_an_invite_records_the_author_and_shows_the_link(self):
         response = self.client.post(
             reverse("admin:accounts_invite_add"),
-            {"label": "New trial", "is_active": "on", "max_uses": 1},
+            {
+                "label": "New trial",
+                "is_active": "on",
+                "max_uses": 1,
+                # An invite now also says what kind of workspace it leads to.
+                "creates_sandbox": "on",
+                "granted_role": "client_admin",
+                "site_limit": 0,
+            },
             follow=True,
         )
 

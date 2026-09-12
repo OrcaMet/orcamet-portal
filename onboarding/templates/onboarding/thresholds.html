@@ -1,0 +1,63 @@
+{% extends "onboarding/_wizard.html" %}
+
+{% block wizard_title %}Check your limits{% endblock %}
+{% block wizard_heading %}Check your limits{% endblock %}
+
+{% block wizard_body %}
+<div class="section">
+    <p class="lede">
+        These are the numbers behind every GO, CAUTION and CANCEL you will
+        see. They came from the starting point you picked — change anything
+        that does not match how you actually work.
+    </p>
+    <p class="section-hint">
+        Wind and gusts are in metres per second. Multiply by 2 for a rough
+        figure in knots: 10 m/s is about 19 knots.
+    </p>
+</div>
+
+<form method="post" class="site-form">
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+    <div class="alert alert-error">{{ form.non_field_errors }}</div>
+    {% endif %}
+
+    <div class="section">
+        <h2>Limits</h2>
+        <div class="threshold-form-grid">
+            {% for field, note in fields_with_notes %}
+            <div class="form-row threshold-form-row">
+                <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                {{ field }}
+                <p class="form-help">{{ note }}</p>
+                {% if field.errors %}
+                <p class="form-error">{{ field.errors|striptags }}</p>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if site_count > 1 %}
+    <div class="section">
+        <div class="form-row form-row-inline">
+            {{ form.apply_to_all }}
+            <label for="{{ form.apply_to_all.id_for_label }}">
+                {{ form.apply_to_all.label }} ({{ site_count }} sites)
+            </label>
+        </div>
+        <p class="form-help">{{ form.apply_to_all.help_text }}</p>
+    </div>
+    {% else %}
+        {{ form.apply_to_all.as_hidden }}
+    {% endif %}
+
+    <div class="wizard-inline-actions">
+        <button type="submit" class="btn btn-primary btn-large">
+            Save and finish
+        </button>
+        <a href="{% url 'onboarding:sites' %}" class="btn">Back</a>
+    </div>
+</form>
+{% endblock %}

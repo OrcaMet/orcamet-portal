@@ -7,10 +7,14 @@ ThresholdProfile: Configurable weather limits for a site.
 ChangeLog: Audit trail for threshold and site changes.
 """
 
+import logging
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 class Client(models.Model):
@@ -25,8 +29,59 @@ class Client(models.Model):
         default=False,
         help_text=(
             "A private trial workspace created by an invite link, not a real "
-            "paying client. Sandbox owners may add and edit their own sites "
-            "through the portal, subject to SANDBOX_MAX_SITES."
+            "paying client. Affects wording only — whether the workspace may "
+            "manage its own sites is controlled by 'self service sites'."
+        ),
+    )
+    self_service_sites = models.BooleanField(
+        default=False,
+        help_text=(
+            "Let this client's admins add, edit and import their own sites "
+            "through the portal. Off by default: staff-managed clients are "
+            "administered here, in the Django admin. Granted by the invite "
+            "that provisions a workspace."
+        ),
+    )
+    site_limit = models.PositiveIntegerField(
+        default=0,
+        help_text=(
+            "Maximum active sites this client may create for itself. "
+            "0 falls back to SANDBOX_MAX_SITES. Ignored unless "
+            "'self service sites' is on — staff-created sites are never capped."
+        ),
+    )
+    onboarding_completed_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text=(
+            "When the workspace finished the onboarding wizard. Blank means "
+            "an admin logging in is sent to the wizard instead of the "
+            "dashboard. Clear it to make them walk through it again."
+        ),
+    )
+
+    # Defaults for new sites, chosen during onboarding.
+    #
+    # On the Client rather than in the session, because they outlive
+    # onboarding: a site added six months later must get the same limits and
+    # the same exposure as the ones imported on day one. Held in the session
+    # they were invisible to every code path except the wizard itself, which
+    # silently gave a later single-site add the model's field defaults
+    # instead of the client's chosen preset.
+    threshold_preset = models.CharField(
+        max_length=40,
+        blank=True,
+        help_text=(
+            "Starting weather limits applied to new sites. Blank uses the "
+            "standard rope access preset. Changing this does not touch "
+            "existing sites — their thresholds are edited per site."
+        ),
+    )
+    default_exposure = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text=(
+            "Exposure given to imported sites that do not name one, and "
+            "pre-selected when adding a site by hand. Blank means Urban."
         ),
     )
     created_at = models.DateTimeField(auto_now_add=True)
@@ -41,6 +96,50 @@ class Client(models.Model):
     @property
     def active_sites(self):
         return self.site_set.filter(is_active=True)
+
+    @property
+    def effective_site_limit(self):
+        """
+        How many active sites this client may have.
+
+        site_limit == 0 is the documented "unset" sentinel and falls back to
+        SANDBOX_MAX_SITES, so clients predating the field keep the cap they
+        had.
+        """
+        from django.conf import settings
+
+        return self.site_limit or settings.SANDBOX_MAX_SITES
+
+    @property
+    def onboarding_complete(self):
+        return self.onboarding_completed_at is not None
+
+    # The two accessors below resolve a blank — never read the raw fields.
+    # Blank is the normal state for every client that predates onboarding,
+    # and both fields are plain CharFields (Client is declared before Site,
+    # so Exposure's choices are not available to the field), which means a
+    # stale or hand-edited value has to be validated on the way out.
+
+    @property
+    def effective_preset(self):
+        """Threshold preset for new sites, falling back to the default."""
+        from .presets import DEFAULT_PRESET, PRESETS
+
+        if self.threshold_preset in PRESETS:
+            return self.threshold_preset
+        return DEFAULT_PRESET
+
+    @property
+    def effective_exposure(self):
+        """Exposure for new sites that do not state one."""
+        if self.default_exposure in Site.Exposure.values:
+            return self.default_exposure
+        return Site.Exposure.URBAN
+
+    @property
+    def effective_exposure_label(self):
+        """The human-readable form. There is no get_FOO_display for a property."""
+        return Site.Exposure(self.effective_exposure).label
 
 
 class Site(models.Model):
@@ -301,3 +400,82 @@ def geocode_postcode(postcode: str) -> tuple:
         pass
 
     return (None, None)
+
+
+# postcodes.io caps its bulk endpoint at 100 postcodes per request.
+BULK_GEOCODE_CHUNK = 100
+
+
+def normalise_postcode(postcode: str) -> str:
+    """
+    Canonical form for comparing and keying postcodes: upper case, no spaces.
+
+    Bulk lookups are matched back to input rows by postcode, and postcodes.io
+    echoes the query in its own formatting ("EH1 1YZ" for a query of
+    "eh11yz"). Keying both sides through here is what makes that match hold.
+    """
+    return "".join((postcode or "").split()).upper()
+
+
+def geocode_postcodes_bulk(postcodes) -> dict:
+    """
+    Look up many UK postcodes at once via postcodes.io's bulk endpoint.
+
+    Returns {normalised postcode: (latitude, longitude)}, with (None, None)
+    for anything that did not resolve. Every input postcode is present in the
+    result, so callers can report per-row without a second membership check.
+
+    The single-postcode `geocode_postcode` above is one request with a
+    10-second timeout. Importing forty sites through it would hold a worker
+    for minutes; this does the same job in one request per hundred.
+
+    A failed chunk — network error, rate limit, malformed response — leaves
+    its postcodes as (None, None) rather than raising, so a partial outage
+    degrades to "these rows need checking" instead of losing the whole
+    import.
+    """
+    import requests
+
+    unique = []
+    seen = set()
+    for raw in postcodes:
+        clean = normalise_postcode(raw)
+        if clean and clean not in seen:
+            seen.add(clean)
+            unique.append(clean)
+
+    results = {code: (None, None) for code in unique}
+
+    for start in range(0, len(unique), BULK_GEOCODE_CHUNK):
+        chunk = unique[start:start + BULK_GEOCODE_CHUNK]
+        try:
+            resp = requests.post(
+                "https://api.postcodes.io/postcodes",
+                json={"postcodes": chunk},
+                # Generous relative to the single lookup: one request is
+                # doing the work of up to a hundred.
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            if data.get("status") != 200:
+                continue
+
+            for entry in data.get("result") or []:
+                # postcodes.io returns one entry per query, with result null
+                # for anything it could not find.
+                found = entry.get("result")
+                if not found:
+                    continue
+                key = normalise_postcode(entry.get("query", ""))
+                if key in results:
+                    results[key] = (found["latitude"], found["longitude"])
+        except Exception:
+            logger.warning(
+                "Bulk postcode lookup failed for a chunk of %d; "
+                "those rows will be reported as unresolved",
+                len(chunk), exc_info=True,
+            )
+
+    return results

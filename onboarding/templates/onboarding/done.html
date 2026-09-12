@@ -1,0 +1,62 @@
+{% extends "onboarding/_wizard.html" %}
+
+{% block wizard_title %}All set{% endblock %}
+{% block wizard_heading %}You are all set{% endblock %}
+
+{% block wizard_body %}
+<div class="section">
+    <p class="lede">
+        {% if site_count %}
+        {{ site_count }} site{{ site_count|pluralize }} set up and forecasting.
+        {% else %}
+        Your account is ready. Add a site whenever you like.
+        {% endif %}
+    </p>
+</div>
+
+<div class="section">
+    <h2>What happens now</h2>
+    <ul class="wizard-preview">
+        <li>
+            Forecasts are generating. The first couple are usually there
+            within a minute or two; a larger batch fills in over the next
+            hour.
+        </li>
+        <li>
+            After that they refresh twice a day, and whenever you change a
+            site.
+        </li>
+        <li>
+            Your dashboard lists every site with its recommendation. Click one
+            for the hour-by-hour breakdown and what is driving it.
+        </li>
+    </ul>
+</div>
+
+<div class="section">
+    <h2>Worth knowing</h2>
+    <ul class="wizard-preview">
+        <li>
+            Limits can be changed per site at any time — the ones you just set
+            are a starting point, not a commitment.
+        </li>
+        <li>
+            When a job finishes, mark the site complete and we stop
+            forecasting for it, freeing the slot for the next one.
+        </li>
+        <li>
+            A forecast is advice, not a permit. The call on the day is still
+            yours.
+        </li>
+    </ul>
+</div>
+{% endblock %}
+
+{% block wizard_actions %}
+<form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-primary btn-large">
+        Go to my dashboard
+    </button>
+</form>
+{% endblock %}

@@ -14,14 +14,54 @@ class SiteInline(admin.TabularInline):
 
 @admin.register(Client)
 class ClientAdmin(admin.ModelAdmin):
-    list_display = ("name", "contact_name", "contact_email", "is_active", "is_sandbox", "site_count")
-    list_filter = ("is_active", "is_sandbox")
+    list_display = (
+        "name", "contact_name", "contact_email", "is_active",
+        "is_sandbox", "self_service_sites", "site_count", "setup", "defaults",
+    )
+    list_filter = ("is_active", "is_sandbox", "self_service_sites")
     search_fields = ("name", "contact_name", "contact_email")
     inlines = [SiteInline]
+    actions = ["reset_onboarding"]
 
+    @admin.display(description="Active Sites")
     def site_count(self, obj):
-        return obj.site_set.filter(is_active=True).count()
-    site_count.short_description = "Active Sites"
+        used = obj.site_set.filter(is_active=True).count()
+        if not obj.self_service_sites:
+            return used
+        return f"{used} of {obj.effective_site_limit}"
+
+    @admin.display(description="New-site defaults")
+    def defaults(self, obj):
+        """What a site added by this client will be created with."""
+        from .presets import PRESETS
+
+        preset = PRESETS[obj.effective_preset]["label"]
+        return f"{preset} / {obj.effective_exposure_label}"
+
+    @admin.display(description="Setup")
+    def setup(self, obj):
+        if not obj.self_service_sites:
+            return "Staff-managed"
+        if obj.onboarding_completed_at:
+            return f"Done {obj.onboarding_completed_at:%d %b %Y}"
+        return "Not started"
+
+    @admin.action(description="Re-run onboarding for selected clients")
+    def reset_onboarding(self, request, queryset):
+        """
+        Send these clients back through the setup wizard on next login.
+
+        Creates and changes nothing else — their sites, users and thresholds
+        are untouched. Useful when a client wants to revisit their limits
+        with someone walking them through it.
+        """
+        updated = queryset.update(onboarding_completed_at=None)
+        self.message_user(
+            request,
+            f"{updated} client(s) will see the setup wizard next time an "
+            f"admin of theirs logs in.",
+            messages.SUCCESS,
+        )
 
 
 @admin.register(Site)

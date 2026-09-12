@@ -10,5 +10,6 @@ urlpatterns = [
     path("", include("accounts.urls")),
     path("dashboard/", include("dashboard.urls")),
     path("sites/", include("sites.urls")),
+    path("onboarding/", include("onboarding.urls")),
     path("forecasts/", include("forecasts.urls")),
 ]

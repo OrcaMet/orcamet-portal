@@ -204,10 +204,85 @@ Visit `http://localhost:8000`
 
 ---
 
+## Onboarding a Client
+
+A client is onboarded with a link, not by hand-building rows in the admin.
+
+### 1. Create the invite
+
+In `/admin/accounts/invite/`, **Add invite**:
+
+| Field | For a paying client | For a trial | For a colleague joining |
+|---|---|---|---|
+| Creates sandbox | untick | leave ticked | untick |
+| Client name | their company name | leave blank | leave blank |
+| Existing client | — | — | pick the client |
+| Granted role | Client Admin | Client Admin | Client User |
+| Site limit | how many sites they may have | 0 (uses `SANDBOX_MAX_SITES`) | 0 |
+| Max uses | 1 | 1 | team size, or 0 for unlimited |
+
+Saving shows the link to send: `/signup/?invite=<code>`. Untick **is active**
+to revoke it at any point.
+
+### 2. They follow the link
+
+Auth0 signs them up, and `accounts/provisioning.py` creates their user and
+workspace. The workspace is granted `self_service_sites`, which is what lets
+them manage their own sites. **Clients you create in the admin do not get
+this flag** and stay staff-managed, exactly as before.
+
+### 3. They walk the wizard
+
+First login lands on `/onboarding/`, which is resumable — progress is stored
+on the `Client` row, so closing the laptop half way through costs nothing.
+
+1. **Welcome** — how to read GO / CAUTION / CANCEL, and where the numbers come from.
+2. **Your operation** — contact details, a threshold preset from
+   `sites/presets.py`, and their typical exposure. The last two are saved on
+   the `Client` as `threshold_preset` and `default_exposure`, and are the
+   defaults for **every** site created afterwards — imported or added by
+   hand — so a site added months later is scored against the same limits as
+   the first batch. Read them through `Client.effective_preset` and
+   `Client.effective_exposure`, never the raw fields: blank is the normal
+   state for any client predating onboarding.
+3. **Your sites** — the bulk importer.
+4. **Check your limits** — review the preset's actual numbers, optionally applied to every site.
+5. **Finish** — stamps `onboarding_completed_at`, which stops the dashboard redirecting here.
+
+To have a client re-run it, use the **Re-run onboarding** action in the client
+admin. Nothing else about them is changed.
+
+### Bulk site import
+
+At `/sites/import/`, or as step 3 of the wizard. Paste a list or upload a CSV:
+
+```
+Tower Block A, EH1 1YZ
+Harbour Crane, AB11 5DQ, Coastal
+Ridge Mast, LL55 4TY, Highland, 340
+EH1 1YZ
+```
+
+Commas or tabs (so an Excel paste works as-is), a header row is skipped, and
+a line with just a postcode names itself. The next screen shows a per-row
+verdict — resolved with coordinates, or rejected with the reason — and only
+the good rows are created when you confirm.
+
+Geocoding goes through `geocode_postcodes_bulk` in `sites/models.py`, which
+uses postcodes.io's bulk endpoint (100 per request) rather than one request
+per site.
+
+**On forecasts after a big import:** `sites/signals.py` caps inline runs at
+`FORECAST_MAX_CONCURRENT_THREADS` (2) per worker and leaves the rest to the
+scheduled `run_forecasts` job. Twenty sites do not produce twenty forecasts in
+the next minute — the UI says "over the next hour" for that reason.
+
+---
+
 ## Phase Roadmap
 
 - [x] **Phase 1:** Django skeleton + Auth0 + Render deployment + database schema
-- [ ] **Phase 2:** Admin panel for adding sites (postcode geocoding), threshold management
+- [x] **Phase 2:** Admin panel for adding sites (postcode geocoding), threshold management, client onboarding and bulk site import
 - [ ] **Phase 3:** Forecast engine integration (your Python scripts as Django commands)
 - [ ] **Phase 4:** Client portal views (site forecast heatmaps, text reports)
 - [ ] **Phase 5:** UK risk map generation and display

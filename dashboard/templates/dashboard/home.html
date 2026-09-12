@@ -36,11 +36,12 @@
     <div class="section">
         <h2>Your Sites</h2>
 
-        {% if user.is_sandbox_user %}
+        {% if self_service %}
         <p class="form-help">
-            Trial workspace — using {{ site_count }} of {{ sandbox_site_cap }} sites.
-            {% if sandbox_may_add %}
+            {% if is_trial %}Trial workspace — using{% else %}Using{% endif %} {{ site_count }} of {{ site_cap }} sites.
+            {% if may_add_site %}
             <a href="{% url 'sites:site_create' %}" class="btn btn-primary">Add a Site</a>
+            <a href="{% url 'sites:site_import' %}" class="btn">Import a list</a>
             {% else %}
             Remove a site to add another.
             {% endif %}
@@ -101,9 +102,10 @@
             <p>No active sites found.</p>
             {% if user.is_superadmin %}
             <p>Head to the <a href="/admin/sites/site/add/">Admin panel</a> to add sites.</p>
-            {% elif user.is_sandbox_user %}
+            {% elif self_service %}
             <p>
-                Add your first site to see a real forecast for it, or
+                <a href="{% url 'sites:site_import' %}">Add your sites</a> to see
+                real forecasts for them, or
                 <a href="{% url 'dashboard:weather_map' %}">explore the UK weather map</a>
                 straight away.
             </p>
