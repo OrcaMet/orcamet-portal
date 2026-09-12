@@ -237,7 +237,14 @@ First login lands on `/onboarding/`, which is resumable — progress is stored
 on the `Client` row, so closing the laptop half way through costs nothing.
 
 1. **Welcome** — how to read GO / CAUTION / CANCEL, and where the numbers come from.
-2. **Your operation** — contact details, and a threshold preset from `sites/presets.py`.
+2. **Your operation** — contact details, a threshold preset from
+   `sites/presets.py`, and their typical exposure. The last two are saved on
+   the `Client` as `threshold_preset` and `default_exposure`, and are the
+   defaults for **every** site created afterwards — imported or added by
+   hand — so a site added months later is scored against the same limits as
+   the first batch. Read them through `Client.effective_preset` and
+   `Client.effective_exposure`, never the raw fields: blank is the normal
+   state for any client predating onboarding.
 3. **Your sites** — the bulk importer.
 4. **Check your limits** — review the preset's actual numbers, optionally applied to every site.
 5. **Finish** — stamps `onboarding_completed_at`, which stops the dashboard redirecting here.

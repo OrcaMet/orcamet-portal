@@ -364,6 +364,10 @@ def plan_import(rows, client, preset=""):
     """
     Decide which rows can become sites for `client`, and why the rest cannot.
 
+    `preset` falls back to the client's own choice from onboarding, so a
+    caller that does not care about presets still creates sites with the
+    right limits.
+
     Does the geocoding, in one bulk call for the whole batch. The returned
     plan carries the resolved coordinates, so `create_sites` makes no network
     call and the user creates exactly what the preview showed them.
@@ -375,7 +379,7 @@ def plan_import(rows, client, preset=""):
       * a name already used by one of this client's active sites
       * rows beyond the client's remaining site allowance
     """
-    plan = ImportPlan(preset=preset)
+    plan = ImportPlan(preset=preset or client.effective_preset)
 
     parsed_ok = [row for row in rows if row.ok]
     plan.rejected.extend(row for row in rows if not row.ok)
@@ -462,6 +466,10 @@ def create_sites(plan, client, user):
     two, because...".
     """
     values = thresholds_for(plan.preset)
+    # Rows that did not name an exposure take the client's typical setting,
+    # which is what they were asked for during onboarding. Urban only if
+    # they never answered.
+    default_exposure = client.effective_exposure
     created = []
     skipped = []
 
@@ -498,7 +506,7 @@ def create_sites(plan, client, user):
             latitude=planned.latitude,
             longitude=planned.longitude,
             elevation=row.elevation,
-            exposure=row.exposure or Site.Exposure.URBAN,
+            exposure=row.exposure or default_exposure,
         )
 
         ThresholdProfile.objects.create(site=site, created_by=user, **values)

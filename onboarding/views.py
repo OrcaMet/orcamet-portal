@@ -25,16 +25,13 @@ from django.shortcuts import redirect, render
 from django.utils import timezone
 
 from sites.models import Site, ThresholdProfile
-from sites.presets import DEFAULT_PRESET, PRESETS, thresholds_for
+from sites.presets import PRESETS, thresholds_for
 from sites.views import _import_context, _self_service_client
 
 from .forms import OperationForm, ThresholdsForm
 from .steps import progress
 
 logger = logging.getLogger(__name__)
-
-# The preset chosen in step 2, held until the sites it applies to exist.
-PRESET_SESSION_KEY = "onboarding_preset"
 
 # Plain-language gloss for the threshold fields, so step 4 is a decision
 # somebody can actually make rather than ten unlabelled numbers. Keyed by
@@ -110,14 +107,12 @@ def operation(request):
     if request.method == "POST":
         form = OperationForm(request.POST, instance=client)
         if form.is_valid():
+            # Both defaults land on the Client, so the importer and the
+            # single-site form can read them long after this step is done.
             form.save()
-            request.session[PRESET_SESSION_KEY] = form.cleaned_data["threshold_preset"]
-            request.session["onboarding_exposure"] = form.cleaned_data["default_exposure"]
             return redirect("onboarding:sites")
     else:
-        form = OperationForm(instance=client, initial={
-            "threshold_preset": request.session.get(PRESET_SESSION_KEY, DEFAULT_PRESET),
-        })
+        form = OperationForm(instance=client)
 
     return render(request, "onboarding/operation.html", _base_context(
         client, "operation", form=form, presets=PRESETS,
@@ -137,10 +132,7 @@ def sites(request):
     client = _wizard_client(request.user)
 
     context = _base_context(client, "sites")
-    context.update(_import_context(
-        request, client,
-        preset=request.session.get(PRESET_SESSION_KEY, DEFAULT_PRESET),
-    ))
+    context.update(_import_context(request, client, preset=client.effective_preset))
     context["in_onboarding"] = True
     context["existing_sites"] = Site.objects.filter(client=client, is_active=True)
 
@@ -172,9 +164,9 @@ def thresholds(request):
         # Belt and braces: every site should get one at creation, but a
         # profile-less site would otherwise be scored against the engine's
         # fallbacks with nothing on screen to say so.
-        preset = request.session.get(PRESET_SESSION_KEY, DEFAULT_PRESET)
         profile = ThresholdProfile.objects.create(
-            site=first_site, created_by=request.user, **thresholds_for(preset)
+            site=first_site, created_by=request.user,
+            **thresholds_for(client.effective_preset),
         )
 
     if request.method == "POST":
@@ -261,8 +253,6 @@ def done(request):
             client.save(update_fields=["onboarding_completed_at"])
             logger.info("Onboarding completed for client %s", client.name)
 
-        request.session.pop(PRESET_SESSION_KEY, None)
-        request.session.pop("onboarding_exposure", None)
         messages.success(request, "You are all set. Here is your dashboard.")
         return redirect("dashboard:home")
 

@@ -173,7 +173,7 @@ class OperationStepTests(TestCase):
         self.user = make_workspace()
         self.client.force_login(self.user)
 
-    def test_saves_contact_details_and_remembers_the_preset(self, _queue):
+    def test_saves_contact_details_and_the_new_site_defaults(self, _queue):
         response = self.client.post("/onboarding/operation/", {
             "contact_name": "Jo Patel",
             "contact_email": "jo@summit.example",
@@ -185,7 +185,26 @@ class OperationStepTests(TestCase):
         self.assertRedirects(response, "/onboarding/sites/")
         self.user.client.refresh_from_db()
         self.assertEqual(self.user.client.contact_name, "Jo Patel")
-        self.assertEqual(self.client.session["onboarding_preset"], "crane_lifting")
+        # On the Client, not the session: these outlive onboarding and have
+        # to be readable by the importer and the single-site form.
+        self.assertEqual(self.user.client.threshold_preset, "crane_lifting")
+        self.assertEqual(self.user.client.default_exposure, "coastal")
+
+    def test_the_defaults_survive_a_new_session(self, _queue):
+        """The regression this replaced: a logout used to lose the preset."""
+        self.client.post("/onboarding/operation/", {
+            "contact_name": "Jo Patel",
+            "contact_email": "jo@summit.example",
+            "threshold_preset": "crane_lifting",
+            "default_exposure": "coastal",
+        })
+
+        self.client.logout()
+        self.client.force_login(self.user)
+        self.user.client.refresh_from_db()
+
+        self.assertEqual(self.user.client.effective_preset, "crane_lifting")
+        self.assertEqual(self.user.client.effective_exposure, "coastal")
 
     def test_a_bad_email_is_reported_rather_than_saved(self, _queue):
         response = self.client.post("/onboarding/operation/", {

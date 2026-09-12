@@ -16,7 +16,7 @@ class SiteInline(admin.TabularInline):
 class ClientAdmin(admin.ModelAdmin):
     list_display = (
         "name", "contact_name", "contact_email", "is_active",
-        "is_sandbox", "self_service_sites", "site_count", "setup",
+        "is_sandbox", "self_service_sites", "site_count", "setup", "defaults",
     )
     list_filter = ("is_active", "is_sandbox", "self_service_sites")
     search_fields = ("name", "contact_name", "contact_email")
@@ -29,6 +29,14 @@ class ClientAdmin(admin.ModelAdmin):
         if not obj.self_service_sites:
             return used
         return f"{used} of {obj.effective_site_limit}"
+
+    @admin.display(description="New-site defaults")
+    def defaults(self, obj):
+        """What a site added by this client will be created with."""
+        from .presets import PRESETS
+
+        preset = PRESETS[obj.effective_preset]["label"]
+        return f"{preset} / {obj.effective_exposure_label}"
 
     @admin.display(description="Setup")
     def setup(self, obj):

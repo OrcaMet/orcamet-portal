@@ -58,6 +58,32 @@ class Client(models.Model):
             "dashboard. Clear it to make them walk through it again."
         ),
     )
+
+    # Defaults for new sites, chosen during onboarding.
+    #
+    # On the Client rather than in the session, because they outlive
+    # onboarding: a site added six months later must get the same limits and
+    # the same exposure as the ones imported on day one. Held in the session
+    # they were invisible to every code path except the wizard itself, which
+    # silently gave a later single-site add the model's field defaults
+    # instead of the client's chosen preset.
+    threshold_preset = models.CharField(
+        max_length=40,
+        blank=True,
+        help_text=(
+            "Starting weather limits applied to new sites. Blank uses the "
+            "standard rope access preset. Changing this does not touch "
+            "existing sites — their thresholds are edited per site."
+        ),
+    )
+    default_exposure = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text=(
+            "Exposure given to imported sites that do not name one, and "
+            "pre-selected when adding a site by hand. Blank means Urban."
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     notes = models.TextField(blank=True)
 
@@ -87,6 +113,33 @@ class Client(models.Model):
     @property
     def onboarding_complete(self):
         return self.onboarding_completed_at is not None
+
+    # The two accessors below resolve a blank — never read the raw fields.
+    # Blank is the normal state for every client that predates onboarding,
+    # and both fields are plain CharFields (Client is declared before Site,
+    # so Exposure's choices are not available to the field), which means a
+    # stale or hand-edited value has to be validated on the way out.
+
+    @property
+    def effective_preset(self):
+        """Threshold preset for new sites, falling back to the default."""
+        from .presets import DEFAULT_PRESET, PRESETS
+
+        if self.threshold_preset in PRESETS:
+            return self.threshold_preset
+        return DEFAULT_PRESET
+
+    @property
+    def effective_exposure(self):
+        """Exposure for new sites that do not state one."""
+        if self.default_exposure in Site.Exposure.values:
+            return self.default_exposure
+        return Site.Exposure.URBAN
+
+    @property
+    def effective_exposure_label(self):
+        """The human-readable form. There is no get_FOO_display for a property."""
+        return Site.Exposure(self.effective_exposure).label
 
 
 class Site(models.Model):

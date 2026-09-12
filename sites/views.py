@@ -22,7 +22,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from .forms import SiteForm
 from .importer import ImportPlan, parse_rows, parse_upload, plan_import, create_sites
 from .models import ChangeLog, Site, ThresholdProfile
-from .presets import DEFAULT_PRESET, PRESETS
+from .presets import PRESETS, thresholds_for
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +86,17 @@ def site_create(request):
                 site.save()
 
                 # Every site needs an active threshold profile or the forecast
-                # engine has no limits to score against. Values come from the
-                # model field defaults.
-                ThresholdProfile.objects.create(site=site, created_by=request.user)
+                # engine has no limits to score against.
+                #
+                # Values come from the client's own preset, not the model
+                # field defaults: a site added months after onboarding must
+                # be scored against the same limits as the ones imported on
+                # day one, or a client quietly ends up with two different
+                # sets of limits and no indication which a given site got.
+                ThresholdProfile.objects.create(
+                    site=site, created_by=request.user,
+                    **thresholds_for(client.effective_preset),
+                )
 
                 ChangeLog.objects.create(
                     site=site,
@@ -105,7 +113,9 @@ def site_create(request):
             )
             return redirect("dashboard:site_detail", site_id=site.pk)
     else:
-        form = SiteForm(client=client)
+        form = SiteForm(client=client, initial={
+            "exposure": client.effective_exposure,
+        })
 
     return render(request, "sites/site_form.html", {
         "form": form,
@@ -191,7 +201,7 @@ def _import_context(request, client, plan=None, text="", preset=""):
     return {
         "plan": plan,
         "text": text,
-        "preset": preset or DEFAULT_PRESET,
+        "preset": preset or client.effective_preset,
         "presets": PRESETS,
         "sites_used": used,
         "sites_cap": cap,
@@ -241,7 +251,10 @@ def site_import(request):
                       _import_context(request, client))
 
     text = request.POST.get("sites", "")
-    preset = request.POST.get("preset", DEFAULT_PRESET)
+    # The hidden field carries whatever the preview was built with; the
+    # client's own choice is the fallback for an import started outside
+    # onboarding.
+    preset = request.POST.get("preset") or client.effective_preset
     upload = request.FILES.get("file")
 
     if upload is not None:

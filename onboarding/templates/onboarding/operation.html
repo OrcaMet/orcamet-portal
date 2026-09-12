@@ -52,7 +52,7 @@
             <label class="preset-choice" for="preset-{{ key }}">
                 <input type="radio" name="threshold_preset" value="{{ key }}"
                        id="preset-{{ key }}"
-                       {% if form.threshold_preset.value == key %}checked{% endif %}>
+                       {% if form.threshold_preset.value|stringformat:"s" == key %}checked{% endif %}>
                 <span class="preset-body">
                     <span class="preset-label">{{ preset.label }}</span>
                     <span class="preset-summary">{{ preset.summary }}</span>
