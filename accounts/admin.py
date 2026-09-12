@@ -27,16 +27,33 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(Invite)
 class InviteAdmin(admin.ModelAdmin):
-    """Create and revoke the signup links handed to trial users."""
+    """Create and revoke the signup links that onboard a new workspace."""
 
-    list_display = ("__str__", "signup_link", "status", "uses", "max_uses", "expires_at")
-    list_filter = ("is_active",)
-    search_fields = ("label", "code")
+    list_display = (
+        "__str__", "workspace", "signup_link", "status",
+        "uses", "max_uses", "expires_at",
+    )
+    list_filter = ("is_active", "creates_sandbox")
+    search_fields = ("label", "code", "client_name")
     readonly_fields = ("code", "uses", "created_at", "created_by", "signup_link")
 
     fieldsets = (
         (None, {
             "fields": ("label", "signup_link", "code"),
+        }),
+        ("Where it leads", {
+            "fields": ("creates_sandbox", "client_name", "existing_client",
+                       "granted_role", "site_limit"),
+            "description": (
+                "<strong>A new client:</strong> untick 'creates sandbox' and "
+                "give the client name. They get their own workspace and can "
+                "add their own sites.<br>"
+                "<strong>A trial:</strong> leave 'creates sandbox' ticked. "
+                "The workspace is named after whoever signs up.<br>"
+                "<strong>A colleague joining an existing client:</strong> "
+                "pick the client, untick 'creates sandbox', and leave the "
+                "name, limit and (usually) role as Client User."
+            ),
         }),
         ("Limits", {
             "fields": ("is_active", "max_uses", "uses", "expires_at"),
@@ -49,6 +66,14 @@ class InviteAdmin(admin.ModelAdmin):
             "fields": ("created_at", "created_by"),
         }),
     )
+
+    @admin.display(description="Leads to")
+    def workspace(self, obj):
+        if obj.existing_client_id:
+            return f"Joins {obj.existing_client.name}"
+        if obj.creates_sandbox:
+            return "New trial workspace"
+        return f"New client: {obj.client_name}"
 
     @admin.display(description="Signup link")
     def signup_link(self, obj):

@@ -1,0 +1,46 @@
+{% extends "onboarding/_wizard.html" %}
+
+{% block wizard_title %}Your sites{% endblock %}
+{% block wizard_heading %}Add your sites{% endblock %}
+
+{% block wizard_body %}
+{% if existing_sites %}
+<div class="section">
+    <h2>Already added</h2>
+    <ul class="site-chip-list">
+        {% for site in existing_sites %}
+        <li class="site-chip">{{ site.name }} <span class="unit">{{ site.postcode }}</span></li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<div class="section">
+    <p class="lede">
+        Give us every location you want a forecast for. Most people paste a
+        list straight out of their job sheet — it does not need tidying up
+        first, and we will tell you about anything we could not read.
+    </p>
+</div>
+
+<div class="section">
+    {% include "sites/_import_form.html" %}
+</div>
+
+<div class="section">
+    <h2>Would rather add one at a time?</h2>
+    <p class="section-hint">
+        <a href="{% url 'sites:site_create' %}">Add a single site</a> instead.
+        You can always come back and import the rest later.
+    </p>
+</div>
+{% endblock %}
+
+{% block wizard_actions %}
+{% if existing_sites %}
+<a href="{% url 'onboarding:thresholds' %}" class="btn btn-primary btn-large">
+    Continue to limits
+</a>
+{% endif %}
+<a href="{% url 'onboarding:operation' %}" class="btn">Back</a>
+{% endblock %}

@@ -15,7 +15,11 @@ from sites.models import Client, Site, ThresholdProfile
 
 
 def make_user(sandbox=True, role=User.Role.CLIENT_ADMIN, username="dave"):
-    client = Client.objects.create(name=f"{username} Co", is_sandbox=sandbox)
+    # self_service_sites, not is_sandbox, is what now gates these views —
+    # invite-provisioned workspaces get both, staff-created clients neither.
+    client = Client.objects.create(
+        name=f"{username} Co", is_sandbox=sandbox, self_service_sites=sandbox,
+    )
     return User.objects.create_user(
         username=username, email=f"{username}@example.com",
         role=role, client=client,
@@ -191,11 +195,27 @@ class SandboxForecastOrderingTests(TransactionTestCase):
 @patch("sites.signals.queue_forecast_generation", return_value=True)
 @patch("sites.models.geocode_postcode", return_value=(55.95, -3.19))
 class SandboxDashboardTests(TestCase):
-    """The dashboard grew sandbox-only branches; make sure they render."""
+    """The dashboard grew self-service branches; make sure they render."""
+
+    @staticmethod
+    def _onboarded(user):
+        """
+        Mark setup done.
+
+        The dashboard now redirects a self-service client that has not been
+        through the onboarding wizard, so these tests would otherwise be
+        asserting against a 302. Onboarding itself is covered in
+        onboarding/tests.
+        """
+        from django.utils import timezone
+
+        user.client.onboarding_completed_at = timezone.now()
+        user.client.save(update_fields=["onboarding_completed_at"])
+        return user
 
     @override_settings(SANDBOX_MAX_SITES=3)
     def test_empty_sandbox_dashboard_offers_the_add_link(self, _geo, _queue):
-        user = make_user()
+        user = self._onboarded(make_user())
         self.client.force_login(user)
 
         response = self.client.get("/dashboard/")
@@ -206,7 +226,7 @@ class SandboxDashboardTests(TestCase):
 
     @override_settings(SANDBOX_MAX_SITES=1)
     def test_dashboard_hides_add_link_once_capped(self, _geo, _queue):
-        user = make_user()
+        user = self._onboarded(make_user())
         Site.objects.create(client=user.client, name="S", postcode="EH1 1YZ")
         self.client.force_login(user)
 

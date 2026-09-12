@@ -1,0 +1,12 @@
+{% extends "onboarding/_wizard.html" %}
+
+{% block wizard_title %}Check your sites{% endblock %}
+{% block wizard_heading %}Check your sites{% endblock %}
+
+{% block wizard_body %}
+{% include "sites/_import_preview.html" %}
+{% endblock %}
+
+{% block wizard_actions %}
+<a href="{% url 'onboarding:sites' %}" class="btn">Start the list again</a>
+{% endblock %}

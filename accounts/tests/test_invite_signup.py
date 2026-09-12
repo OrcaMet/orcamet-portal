@@ -17,7 +17,7 @@ from accounts.models import Invite, User
 from accounts.provisioning import (
     SESSION_KEY,
     lookup_invite,
-    provision_sandbox_user,
+    provision_user_from_invite,
 )
 from sites.models import Client
 
@@ -67,7 +67,7 @@ class LookupInviteTests(TestCase):
 class ProvisionSandboxUserTests(TestCase):
     def test_creates_user_with_own_sandbox_client(self):
         invite = make_invite()
-        user = provision_sandbox_user(invite, "auth0|abc", "dave@example.com", "Dave Smith")
+        user = provision_user_from_invite(invite, "auth0|abc", "dave@example.com", "Dave Smith")
 
         self.assertIsNotNone(user)
         self.assertEqual(user.email, "dave@example.com")
@@ -81,12 +81,12 @@ class ProvisionSandboxUserTests(TestCase):
     def test_account_has_no_usable_django_password(self):
         """The account must only be reachable through Auth0."""
         invite = make_invite()
-        user = provision_sandbox_user(invite, "auth0|abc", "dave@example.com", "Dave")
+        user = provision_user_from_invite(invite, "auth0|abc", "dave@example.com", "Dave")
         self.assertFalse(user.has_usable_password())
 
     def test_usage_count_is_incremented(self):
         invite = make_invite(max_uses=2)
-        provision_sandbox_user(invite, "auth0|a", "a@example.com", "A")
+        provision_user_from_invite(invite, "auth0|a", "a@example.com", "A")
         invite.refresh_from_db()
         self.assertEqual(invite.uses, 1)
 
@@ -98,7 +98,7 @@ class ProvisionSandboxUserTests(TestCase):
         invite = make_invite()
         Invite.objects.filter(pk=invite.pk).update(is_active=False)
 
-        user = provision_sandbox_user(invite, "auth0|a", "a@example.com", "A")
+        user = provision_user_from_invite(invite, "auth0|a", "a@example.com", "A")
 
         self.assertIsNone(user)
         self.assertEqual(User.objects.count(), 0)
@@ -106,8 +106,8 @@ class ProvisionSandboxUserTests(TestCase):
 
     def test_second_use_of_single_use_invite_is_refused(self):
         invite = make_invite(max_uses=1)
-        first = provision_sandbox_user(invite, "auth0|a", "a@example.com", "A")
-        second = provision_sandbox_user(invite, "auth0|b", "b@example.com", "B")
+        first = provision_user_from_invite(invite, "auth0|a", "a@example.com", "A")
+        second = provision_user_from_invite(invite, "auth0|b", "b@example.com", "B")
 
         self.assertIsNotNone(first)
         self.assertIsNone(second)
@@ -115,8 +115,8 @@ class ProvisionSandboxUserTests(TestCase):
 
     def test_multi_use_invite_creates_separate_workspaces(self):
         invite = make_invite(max_uses=3)
-        a = provision_sandbox_user(invite, "auth0|a", "dave@example.com", "Dave")
-        b = provision_sandbox_user(invite, "auth0|b", "dave@other.com", "Dave")
+        a = provision_user_from_invite(invite, "auth0|a", "dave@example.com", "Dave")
+        b = provision_user_from_invite(invite, "auth0|b", "dave@other.com", "Dave")
 
         self.assertNotEqual(a.client_id, b.client_id)
         self.assertNotEqual(a.username, b.username)
@@ -124,7 +124,7 @@ class ProvisionSandboxUserTests(TestCase):
     def test_colliding_usernames_are_made_unique(self):
         User.objects.create_user(username="dave", email="existing@example.com")
         invite = make_invite()
-        user = provision_sandbox_user(invite, "auth0|a", "dave@example.com", "Dave")
+        user = provision_user_from_invite(invite, "auth0|a", "dave@example.com", "Dave")
         self.assertNotEqual(user.username, "dave")
 
 

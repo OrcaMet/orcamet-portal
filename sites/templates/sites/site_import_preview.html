@@ -1,0 +1,22 @@
+{% extends "orcamet_portal/base.html" %}
+
+{% block title %}Check your sites — OrcaMet Portal{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="breadcrumb">
+        <a href="{% url 'dashboard:home' %}">Dashboard</a>
+        <span class="breadcrumb-sep">/</span>
+        <a href="{% url 'sites:site_import' %}">Import sites</a>
+        <span class="breadcrumb-sep">/</span>
+        <span>Check</span>
+    </div>
+
+    <div class="dashboard-header">
+        <h1>Check your sites</h1>
+        <p class="dashboard-role">{{ client.name }}</p>
+    </div>
+
+    {% include "sites/_import_preview.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends "orcamet_portal/base.html" %}
+
+{% comment %}
+Shell for every onboarding step: the progress strip, the heading, and the
+skip link. Steps extend this and fill `wizard_body` and `wizard_actions`.
+{% endcomment %}
+
+{% block title %}{% block wizard_title %}Setting up{% endblock %} — OrcaMet Portal{% endblock %}
+
+{% block content %}
+<div class="dashboard wizard">
+
+    <ol class="wizard-steps">
+        {% for item in steps %}
+        <li class="wizard-step{% if item.is_current %} is-current{% endif %}{% if item.is_done %} is-done{% endif %}">
+            <span class="wizard-step-number">{% if item.is_done %}&check;{% else %}{{ item.number }}{% endif %}</span>
+            <span class="wizard-step-label">
+                <span class="wizard-step-title">{{ item.step.title }}</span>
+                <span class="wizard-step-blurb">{{ item.step.blurb }}</span>
+            </span>
+        </li>
+        {% endfor %}
+    </ol>
+
+    <div class="dashboard-header">
+        <h1>{% block wizard_heading %}{% endblock %}</h1>
+        <p class="dashboard-role">{{ client.name }}</p>
+    </div>
+
+    {% block wizard_body %}{% endblock %}
+
+    <div class="wizard-footer">
+        <div class="form-actions">
+            {% block wizard_actions %}{% endblock %}
+        </div>
+
+        {% if current_slug != "done" %}
+        <form method="post" action="{% url 'onboarding:skip' %}" class="wizard-skip">
+            {% csrf_token %}
+            <button type="submit" class="btn-link">
+                Skip setup and go to my dashboard
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

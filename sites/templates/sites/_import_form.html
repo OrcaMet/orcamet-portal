@@ -1,0 +1,53 @@
+{% comment %}
+The import form itself, shared by the standalone page and onboarding step 3
+so the two cannot drift apart. The including template supplies nothing; it
+only decides where this sits and what surrounds it.
+{% endcomment %}
+
+<form method="post"
+      action="{% url 'sites:site_import' %}{% if in_onboarding %}?onboarding=1{% endif %}"
+      enctype="multipart/form-data" class="site-form import-form">
+    {% csrf_token %}
+    <input type="hidden" name="preset" value="{{ preset }}">
+
+    <div class="form-row">
+        <label for="id_sites">Your sites</label>
+        <textarea id="id_sites" name="sites" rows="10"
+                  placeholder="Tower Block A, EH1 1YZ&#10;Harbour Crane, AB11 5DQ, Coastal&#10;Ridge Mast, LL55 4TY, Highland, 340">{{ text }}</textarea>
+        <p class="form-help">
+            One site per line: <strong>name, postcode</strong>. You can paste
+            straight out of a spreadsheet — commas or tabs both work.
+            Optionally add the setting and the elevation in metres:
+            <code>name, postcode, coastal, 340</code>. A line with just a
+            postcode gets the postcode as its name.
+        </p>
+    </div>
+
+    <details class="import-help">
+        <summary>Or upload a spreadsheet</summary>
+        <div class="form-row">
+            <label for="id_file">CSV file</label>
+            <input type="file" id="id_file" name="file" accept=".csv,.txt,text/csv,text/plain">
+            <p class="form-help">
+                Save your spreadsheet as CSV first. A header row is fine — we
+                skip it. Columns in the order name, postcode, setting,
+                elevation; the last two are optional.
+            </p>
+        </div>
+    </details>
+
+    <p class="form-help">
+        You have room for <strong>{{ sites_remaining }}</strong> more site{{ sites_remaining|pluralize }}
+        ({{ sites_used }} of {{ sites_cap }} used). Nothing is created yet —
+        the next screen shows you what we found so you can check it first.
+    </p>
+
+    <div class="form-actions">
+        <button type="submit" class="btn btn-primary btn-large">
+            Check these sites
+        </button>
+        {% if not in_onboarding %}
+        <a href="{% url 'dashboard:home' %}" class="btn">Cancel</a>
+        {% endif %}
+    </div>
+</form>

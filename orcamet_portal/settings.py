@@ -113,6 +113,7 @@ INSTALLED_APPS = [
     "sites.apps.SitesConfig",
     "forecasts.apps.ForecastsConfig",
     "dashboard.apps.DashboardConfig",
+    "onboarding.apps.OnboardingConfig",
     # Django built-ins
     "django.contrib.admin",
     "django.contrib.auth",

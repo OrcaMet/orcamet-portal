@@ -701,6 +701,10 @@ a:hover { color: var(--teal); text-decoration: underline; }
 /* --- Site form (sandbox self-service) --- */
 .site-form { max-width: 560px; }
 
+/* Inside the wizard the form is the page, and the threshold grid is two
+   columns wide — 560px would force it back to one. */
+.wizard .site-form { max-width: none; }
+
 .form-row { margin-bottom: 1.1rem; }
 
 .form-row label {
@@ -711,8 +715,19 @@ a:hover { color: var(--teal); text-decoration: underline; }
     margin-bottom: 0.35rem;
 }
 
+/* Every text-like input, not a list of the two types that happened to
+   exist when this was written — onboarding added email and tel fields, which
+   fell through to the browser default width and sat visibly narrower than
+   the boxes above and below them. */
 .form-row input[type="text"],
 .form-row input[type="number"],
+.form-row input[type="email"],
+.form-row input[type="tel"],
+.form-row input[type="url"],
+.form-row input[type="search"],
+.form-row input[type="password"],
+.form-row input[type="date"],
+.form-row input[type="file"],
 .form-row select,
 .form-row textarea {
     width: 100%;
@@ -771,4 +786,217 @@ a:hover { color: var(--teal); text-decoration: underline; }
     .site-header-status { text-align: left; }
 
     .chart-container { height: 260px; }
+}
+
+/* ============================================================
+   ONBOARDING WIZARD
+   ============================================================ */
+
+/* Narrower than the dashboard's 1200px: the wizard is mostly prose and
+   forms, and a 1200px line length is hard to read. Centred, or it hangs off
+   the left of a wide window. */
+.wizard { max-width: 860px; margin: 0 auto; }
+
+.lede {
+    font-size: 1.05rem;
+    line-height: 1.65;
+    color: var(--text-primary);
+}
+
+.wizard-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    list-style: none;
+    margin: 0 0 2rem;
+    padding: 0;
+    counter-reset: none;
+}
+
+.wizard-step {
+    flex: 1 1 140px;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.75rem 0.9rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    /* The strip is orientation, not navigation — nothing in it is a link,
+       so it must not read as clickable. */
+    color: var(--text-secondary);
+}
+
+.wizard-step.is-current {
+    border-color: var(--teal);
+    background: var(--ocean-light);
+    color: var(--text-primary);
+}
+
+.wizard-step.is-done { border-color: var(--green-go); }
+
+.wizard-step-number {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    background: var(--surface-light);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.wizard-step.is-current .wizard-step-number { background: var(--teal); color: var(--white); }
+.wizard-step.is-done .wizard-step-number { background: var(--green-go); color: var(--white); }
+
+.wizard-step-label { display: flex; flex-direction: column; gap: 0.15rem; }
+.wizard-step-title { font-size: 0.9rem; font-weight: 600; }
+.wizard-step-blurb { font-size: 0.75rem; color: var(--text-secondary); line-height: 1.35; }
+
+/* The blurbs are helpful on a laptop and noise on a phone, where the strip
+   has to stay a strip. */
+@media (max-width: 640px) {
+    .wizard-step-blurb { display: none; }
+    .wizard-step { flex: 1 1 auto; padding: 0.5rem; }
+}
+
+.wizard-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+}
+
+.wizard-inline-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-top: 1.5rem;
+}
+
+.wizard-skip { margin: 0; }
+
+.btn-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.btn-link:hover { color: var(--teal-bright); }
+
+.wizard-legend { display: flex; flex-direction: column; gap: 1rem; margin: 1.25rem 0; }
+
+.wizard-legend-item {
+    display: grid;
+    grid-template-columns: 7rem 1fr;
+    gap: 1rem;
+    align-items: start;
+}
+
+.wizard-legend-item p { margin: 0; color: var(--text-secondary); line-height: 1.55; }
+
+@media (max-width: 560px) {
+    .wizard-legend-item { grid-template-columns: 1fr; gap: 0.4rem; }
+}
+
+.wizard-preview { margin: 0.5rem 0 0 1.1rem; padding: 0; color: var(--text-secondary); }
+.wizard-preview li { margin-bottom: 0.6rem; line-height: 1.55; }
+
+/* ---- Threshold presets ---- */
+
+.preset-choices { display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1rem; }
+
+.preset-choice {
+    display: flex;
+    gap: 0.85rem;
+    align-items: flex-start;
+    padding: 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+}
+
+.preset-choice:hover { border-color: var(--teal); }
+.preset-choice:has(input:checked) { border-color: var(--teal); background: var(--ocean-light); }
+
+.preset-choice input { margin-top: 0.25rem; flex: 0 0 auto; }
+.preset-body { display: flex; flex-direction: column; gap: 0.3rem; }
+.preset-label { font-weight: 600; }
+.preset-summary { font-size: 0.85rem; color: var(--text-secondary); line-height: 1.55; }
+
+.threshold-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 1.25rem;
+}
+
+.threshold-form-row { margin: 0; }
+
+.form-row-inline { display: flex; align-items: center; gap: 0.6rem; }
+.form-row-inline label { margin: 0; }
+
+/* ============================================================
+   BULK SITE IMPORT
+   ============================================================ */
+
+.import-form textarea {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.9rem;
+    line-height: 1.6;
+    white-space: pre;
+    overflow-x: auto;
+}
+
+.import-help {
+    margin: 1rem 0;
+    padding: 0.75rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.import-help summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.import-help .form-row { margin-top: 1rem; }
+
+/* A left edge rather than a tinted row: these tables are read line by line
+   against the text the user typed, and a full-width wash makes the
+   monospaced content in them harder to scan, not easier. */
+.import-row-ok td { border-left: 0; }
+.import-row-ok td:first-child { border-left: 3px solid var(--green-go); }
+.import-row-error td:first-child { border-left: 3px solid var(--red-cancel); }
+.import-row-error td:last-child { color: var(--amber-caution); }
+
+.import-coords {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.site-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+}
+
+.site-chip {
+    padding: 0.35rem 0.7rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.85rem;
 }

@@ -1,0 +1,83 @@
+{% extends "onboarding/_wizard.html" %}
+
+{% block wizard_title %}Welcome{% endblock %}
+{% block wizard_heading %}Welcome to OrcaMet{% endblock %}
+
+{% block wizard_body %}
+<div class="section">
+    <p class="lede">
+        This takes about five minutes. At the end of it you will have a
+        dashboard showing, for every location you work at, whether the
+        weather is going to let you work.
+    </p>
+</div>
+
+<div class="section">
+    <h2>How to read a forecast</h2>
+
+    <p>
+        Every site gets a recommendation for each day, from three:
+    </p>
+
+    <div class="wizard-legend">
+        <div class="wizard-legend-item">
+            <span class="status-badge status-go">GO</span>
+            <p>
+                Conditions stay inside the limits you set. Nothing to think
+                about.
+            </p>
+        </div>
+        <div class="wizard-legend-item">
+            <span class="status-badge status-caution">CAUTION</span>
+            <p>
+                Something crosses a caution limit at some point in the day.
+                Worth looking at the hourly breakdown before committing a
+                team — often it is a two-hour window rather than the day.
+            </p>
+        </div>
+        <div class="wizard-legend-item">
+            <span class="status-badge status-cancel">CANCEL</span>
+            <p>
+                A cancel limit is crossed. We also show how likely that is,
+                and which variable is driving it.
+            </p>
+        </div>
+    </div>
+
+    <p class="section-hint">
+        The limits behind those words are yours, not ours — you set them in a
+        moment, and they are what makes the recommendation mean anything.
+    </p>
+</div>
+
+<div class="section">
+    <h2>Where the numbers come from</h2>
+    <p>
+        Each forecast blends four independent weather models — the Met
+        Office UKV, ECMWF, ICON-EU and ARPEGE — rather than trusting one.
+        Where they agree, confidence is high. Where they disagree, that
+        disagreement is itself the useful signal, and it is why a forecast
+        can say <em>60% chance of cancelling</em> instead of pretending to
+        know.
+    </p>
+    <p>
+        Forecasts refresh twice a day, and again whenever you add or change a
+        site.
+    </p>
+</div>
+
+<div class="section">
+    <h2>What you will do next</h2>
+    <ol class="wizard-preview">
+        <li>Confirm your contact details and pick the limits you work to.</li>
+        <li>Add your sites — paste a list or upload a spreadsheet.</li>
+        <li>Check the limits look right before they start flagging jobs.</li>
+    </ol>
+</div>
+{% endblock %}
+
+{% block wizard_actions %}
+<a href="{% url 'onboarding:operation' %}" class="btn btn-primary btn-large">
+    Get started
+</a>
+{% endblock %}

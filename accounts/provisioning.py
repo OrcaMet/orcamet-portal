@@ -4,7 +4,16 @@ OrcaMet Portal — Invite-based account provisioning.
 Normally the Auth0 callback refuses anyone without a matching Django user:
 accounts are created by OrcaMet staff in the admin. This module is the one
 exception — someone holding a valid invite link gets an account created for
-them on first login, together with their own private sandbox Client.
+them on first login, in the workspace the invite describes.
+
+An invite leads to one of three places:
+
+  * a trial workspace  — `creates_sandbox`, capped, labelled "(Sandbox)"
+  * a real client      — a paying client, named on the invite
+  * an existing client — a colleague joining a workspace already set up
+
+The first two create a Client and grant it self-service site management. The
+third creates nothing and inherits whatever that client already has.
 
 Kept out of views.py so the trust rules live in one auditable place.
 """
@@ -54,10 +63,9 @@ def _unique_username(email):
     return candidate
 
 
-def _sandbox_client_name(name, email):
-    """A recognisable, unique name for the tester's own workspace."""
-    label = (name or email.split("@")[0]).strip()
-    base = f"{label} (Sandbox)"[:200]
+def _unique_client_name(base):
+    """Make `base` unique among Clients, since nothing else disambiguates."""
+    base = base[:200]
     candidate = base
     suffix = 2
     while Client.objects.filter(name__iexact=candidate).exists():
@@ -66,10 +74,25 @@ def _sandbox_client_name(name, email):
     return candidate
 
 
-@transaction.atomic
-def provision_sandbox_user(invite, auth0_id, email, name):
+def _workspace_name(invite, name, email):
     """
-    Create a test account and its private sandbox Client for `invite`.
+    What to call the workspace this invite creates.
+
+    A real client is named on the invite, because the company's name is known
+    before anyone signs up. A trial is not, so it is derived from whoever
+    turns up and marked as a sandbox so it cannot be mistaken for a client.
+    """
+    if not invite.creates_sandbox:
+        return _unique_client_name(invite.client_name.strip())
+
+    label = (invite.client_name or name or email.split("@")[0]).strip()
+    return _unique_client_name(f"{label} (Sandbox)")
+
+
+@transaction.atomic
+def provision_user_from_invite(invite, auth0_id, email, name):
+    """
+    Create an account for `invite`, and its workspace if the invite makes one.
 
     The caller is responsible for having verified the identity — in
     particular that Auth0 asserted the email address is verified. Returns the
@@ -82,7 +105,12 @@ def provision_sandbox_user(invite, auth0_id, email, name):
     # Re-check under a row lock. is_usable was evaluated before the round trip
     # to Auth0, which can be minutes earlier — the invite may have been
     # revoked or used up by someone else in the meantime.
-    locked = Invite.objects.select_for_update().filter(pk=invite.pk).first()
+    locked = (
+        Invite.objects.select_for_update()
+        .select_related("existing_client")
+        .filter(pk=invite.pk)
+        .first()
+    )
     if locked is None or not locked.is_usable:
         logger.warning(
             "Invite %s no longer usable at provisioning time (sub=%s)",
@@ -90,13 +118,27 @@ def provision_sandbox_user(invite, auth0_id, email, name):
         )
         return None
 
-    client = Client.objects.create(
-        name=_sandbox_client_name(name, email),
-        contact_name=name or "",
-        contact_email=email or "",
-        is_sandbox=True,
-        notes=f"Trial workspace created from invite '{locked}'.",
-    )
+    if locked.existing_client_id:
+        # Joining, not creating. Nothing about the target workspace changes —
+        # in particular its site limit is not raised by a new member, and a
+        # staff-managed client does not become self-service because somebody
+        # was invited into it.
+        client = locked.existing_client
+        created_workspace = False
+    else:
+        client = Client.objects.create(
+            name=_workspace_name(locked, name, email),
+            contact_name=name or "",
+            contact_email=email or "",
+            is_sandbox=locked.creates_sandbox,
+            # The invite is the deliberate grant: a workspace nobody at
+            # OrcaMet has set up has to be able to set itself up. Clients
+            # created in the admin are unaffected and stay staff-managed.
+            self_service_sites=True,
+            site_limit=locked.site_limit,
+            notes=f"Workspace created from invite '{locked}'.",
+        )
+        created_workspace = True
 
     first_name, _, last_name = (name or "").partition(" ")
 
@@ -110,10 +152,9 @@ def provision_sandbox_user(invite, auth0_id, email, name):
         # to brute-force at the Django end.
         password=None,
         auth0_id=auth0_id or None,
-        # Admin of their own sandbox only, which is what lets them add sites
-        # and edit thresholds there. Scoping is enforced per-view against
-        # user.client, so this grants nothing outside their own workspace.
-        role=User.Role.CLIENT_ADMIN,
+        # Scoping is enforced per-view against user.client, so even
+        # client_admin grants nothing outside this one workspace.
+        role=locked.granted_role,
         client=client,
     )
 
@@ -121,7 +162,8 @@ def provision_sandbox_user(invite, auth0_id, email, name):
     Invite.objects.filter(pk=locked.pk).update(uses=F("uses") + 1)
 
     logger.info(
-        "Provisioned sandbox account %s (client=%s) from invite %s",
-        user.username, client.name, locked.pk,
+        "Provisioned account %s (client=%s, new_workspace=%s, role=%s) "
+        "from invite %s",
+        user.username, client.name, created_workspace, user.role, locked.pk,
     )
     return user

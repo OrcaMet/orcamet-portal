@@ -1,0 +1,86 @@
+{% extends "onboarding/_wizard.html" %}
+
+{% block wizard_title %}Your operation{% endblock %}
+{% block wizard_heading %}Your operation{% endblock %}
+
+{% block wizard_body %}
+<form method="post" class="site-form">
+    {% csrf_token %}
+
+    {% if form.non_field_errors %}
+    <div class="alert alert-error">{{ form.non_field_errors }}</div>
+    {% endif %}
+
+    <div class="section">
+        <h2>Contact details</h2>
+        <p class="section-hint">
+            Who we speak to if something needs your attention.
+        </p>
+
+        {% for field in form %}
+            {% if field.name == "contact_name" or field.name == "contact_email" or field.name == "contact_phone" %}
+            <div class="form-row">
+                <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                {{ field }}
+                {% if field.help_text %}<p class="form-help">{{ field.help_text }}</p>{% endif %}
+                {% if field.errors %}<p class="form-error">{{ field.errors|striptags }}</p>{% endif %}
+            </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+
+    <div class="section">
+        <h2>What limits do you work to?</h2>
+        <p class="section-hint">
+            Pick the closest starting point. We apply it to every site you add
+            on the next step, and you check the actual numbers straight
+            afterwards — so this is a shortcut, not a commitment.
+        </p>
+
+        {% if form.threshold_preset.errors %}
+        <p class="form-error">{{ form.threshold_preset.errors|striptags }}</p>
+        {% endif %}
+
+        {% comment %}
+        Rendered by hand rather than through the RadioSelect widget: each
+        option needs its summary prose beside it, and matching a widget's
+        rendered label back to the preset it came from is the kind of
+        indirection that breaks the first time two presets are renamed.
+        {% endcomment %}
+        <div class="preset-choices">
+            {% for key, preset in presets.items %}
+            <label class="preset-choice" for="preset-{{ key }}">
+                <input type="radio" name="threshold_preset" value="{{ key }}"
+                       id="preset-{{ key }}"
+                       {% if form.threshold_preset.value == key %}checked{% endif %}>
+                <span class="preset-body">
+                    <span class="preset-label">{{ preset.label }}</span>
+                    <span class="preset-summary">{{ preset.summary }}</span>
+                </span>
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Typical setting</h2>
+        <div class="form-row">
+            <label for="{{ form.default_exposure.id_for_label }}">
+                {{ form.default_exposure.label }}
+            </label>
+            {{ form.default_exposure }}
+            <p class="form-help">{{ form.default_exposure.help_text }}</p>
+            {% if form.default_exposure.errors %}
+            <p class="form-error">{{ form.default_exposure.errors|striptags }}</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="wizard-inline-actions">
+        <button type="submit" class="btn btn-primary btn-large">
+            Continue to sites
+        </button>
+        <a href="{% url 'onboarding:welcome' %}" class="btn">Back</a>
+    </div>
+</form>
+{% endblock %}
