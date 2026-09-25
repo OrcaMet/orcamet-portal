@@ -368,7 +368,12 @@ def _member_breaches_at(member, index, thresholds, level):
         if limit is None:
             continue
         value = member[var][index]
-        if value is not None and value > limit:
+        # >=, not >: a value exactly on a limit breaches it, as it does in
+        # core.evaluate_thresholds, the map's marker gate and the risk grid
+        # (see test_breach_boundary). With > a gust landing exactly on the
+        # cancel limit turned the verdict to CANCEL while this member was
+        # not counted towards the chance of cancellation printed beside it.
+        if value is not None and value >= limit:
             hit.add(key)
 
     # Temperature is two-sided: too cold or too hot both stop work.

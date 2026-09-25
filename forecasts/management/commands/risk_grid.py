@@ -29,7 +29,6 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import numpy as np
-import requests  # for requests.exceptions.HTTPError in the retry path
 from django.core.management.base import BaseCommand, CommandError
 from django.conf import settings
 from django.utils import timezone as dj_timezone
@@ -37,12 +36,7 @@ from django.utils import timezone as dj_timezone
 from forecasts.models import (
     UKRiskGridRun, UKRiskGridPoint, CachedContourImage, MapThresholds,
 )
-from forecasts.engine.core import (
-    calculate_hourly_risk,
-    MODELS_CONFIG,
-    scrub_key,
-    _session,
-)
+from forecasts.engine.core import calculate_hourly_risk, scrub_key
 from forecasts.engine import ensemble as ens
 
 logger = logging.getLogger(__name__)
@@ -61,8 +55,6 @@ UK_LON_MAX = 1.8
 # site-specific exposure to draw on. They now live in the MapThresholds
 # singleton, editable in the Django admin; the starting values are that
 # model's field defaults.
-
-HOURLY_VARS = "wind_speed_10m,wind_gusts_10m,precipitation,temperature_2m"
 
 # How many records to flush to DB at a time
 DB_BATCH_SIZE = 5000
@@ -154,60 +146,6 @@ def _safe_float(value):
     return f
 
 
-def fetch_batch(model_name, lats, lons, start_date, end_date):
-    """
-    Fetch weather data for MULTIPLE locations in a single API call.
-    Returns list of dicts, one per location. Failed locations return None.
-
-    Raises requests.exceptions.HTTPError on non-retryable API errors.
-    """
-    config = MODELS_CONFIG[model_name]
-    api_key = getattr(settings, "OPENMETEO_API_KEY", "")
-
-    params = {
-        "latitude": ",".join(f"{lat:.4f}" for lat in lats),
-        "longitude": ",".join(f"{lon:.4f}" for lon in lons),
-        "hourly": HOURLY_VARS,
-        "timezone": "UTC",
-        "wind_speed_unit": "ms",
-        "precipitation_unit": "mm",
-        "start_date": start_date,
-        "end_date": end_date,
-        **config["params"],
-    }
-
-    if api_key:
-        params["apikey"] = api_key
-
-    # Use the shared session so grid fetches get the same retry/backoff on
-    # 429/5xx that single-site fetches do. This is the heaviest API workload
-    # in the app and was previously the only one without it.
-    resp = _session.get(config["url"], params=params, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-
-    if isinstance(data, dict):
-        data = [data]
-
-    results = []
-    for i, item in enumerate(data):
-        h = item.get("hourly", {})
-        if not h or "time" not in h:
-            results.append(None)
-            continue
-        results.append({
-            "lat": lats[i],
-            "lon": lons[i],
-            "time": h["time"],
-            "wind_speed": h.get("wind_speed_10m", []),
-            "wind_gusts": h.get("wind_gusts_10m", []),
-            "precipitation": h.get("precipitation", []),
-            "temperature": h.get("temperature_2m", []),
-        })
-
-    return results
-
-
 # ============================================================
 # MANAGEMENT COMMAND
 # ============================================================
@@ -271,10 +209,14 @@ class Command(BaseCommand):
                 f"Valid options: {', '.join(sorted(valid_vars))}"
             )
 
-        grid_run = None
+        # Set by _run_pipeline as soon as it creates the run record. The
+        # return value cannot be used for this: when the pipeline raises it
+        # never returns, so the handler below used to see None and leave a
+        # crashed run marked RUNNING for good.
+        self._grid_run = None
 
         try:
-            grid_run = self._run_pipeline(
+            self._run_pipeline(
                 resolution, num_days, batch_size, contour_vars, retention_days
             )
         except CommandError:
@@ -284,11 +226,23 @@ class Command(BaseCommand):
             # Catch any unexpected error, mark the run as failed, then re-raise
             # so Render sees a non-zero exit code
             logger.exception("Unexpected error in risk_grid")
-            if grid_run:
-                grid_run.status = UKRiskGridRun.Status.FAILED
-                grid_run.error_message = f"Unexpected error: {scrub_key(e)}"
-                grid_run.save()
+            self._mark_failed(f"Unexpected error: {scrub_key(e)}")
             raise CommandError(f"Unexpected error: {scrub_key(e)}")
+
+    def _mark_failed(self, message):
+        """
+        Mark the run FAILED if it is still RUNNING.
+
+        Only a run still in progress: the pipeline can also raise after the
+        run has been marked SUCCESS — rendering contours, or pruning old
+        runs — and that run's data is complete and in use by the map.
+        """
+        grid_run = self._grid_run
+        if grid_run is None:
+            return
+        UKRiskGridRun.objects.filter(
+            pk=grid_run.pk, status=UKRiskGridRun.Status.RUNNING,
+        ).update(status=UKRiskGridRun.Status.FAILED, error_message=message)
 
     def _render_contours(self, grid_run, contour_vars):
         """
@@ -443,8 +397,6 @@ class Command(BaseCommand):
         # in cleanup_forecasts. Both compare against forecast_date.
         today = dj_timezone.localdate()
         end_date = today + timedelta(days=num_days - 1)
-        start_str = today.strftime("%Y-%m-%d")
-        end_str = end_date.strftime("%Y-%m-%d")
 
         # Fast lookup: (lat, lon) -> index in grid_points
         point_index = {pt: i for i, pt in enumerate(grid_points)}
@@ -504,6 +456,7 @@ class Command(BaseCommand):
             grid_points=total_points,
             models_used=models_used,
         )
+        self._grid_run = grid_run
 
         start_time = time.time()
 

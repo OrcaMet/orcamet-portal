@@ -4,6 +4,17 @@
 
 {% block content %}
 <div class="error-page">
+    {% if deactivated %}
+    <h1>Access Switched Off</h1>
+    <p>
+        Hello {{ name|default:"there" }}. Your OrcaMet portal account
+        {% if email %}(<strong>{{ email }}</strong>){% endif %}
+        has been deactivated.
+    </p>
+    <p>
+        Please contact your OrcaMet account manager if you need access again.
+    </p>
+    {% else %}
     <h1>Access Not Configured</h1>
     <p>
         Hello {{ name|default:"there" }}. You've successfully authenticated
@@ -13,6 +24,7 @@
     <p>
         Please contact your OrcaMet account manager to have your portal access configured.
     </p>
+    {% endif %}
     <a href="{% url 'accounts:index' %}" class="btn btn-primary">Return to Home</a>
 </div>
 {% endblock %}
