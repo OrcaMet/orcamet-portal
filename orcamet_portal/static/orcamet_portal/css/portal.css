@@ -771,4 +771,24 @@ a:hover { color: var(--teal); text-decoration: underline; }
     .site-header-status { text-align: left; }
 
     .chart-container { height: 260px; }
+
+    /* The nav is one fixed-height row. With a brand, up to three links and
+       the user's name it ran about 70px past a 390px phone and dragged the
+       whole page sideways. */
+    .navbar { padding: 0 1rem; }
+    .nav-links { gap: 0.25rem; }
+    .nav-link { padding: 0.4rem 0.55rem; }
+    .nav-user { display: none; }
+}
+
+@media (max-width: 420px) {
+    /* The logo alone still reads as home on the smallest phones. */
+    .nav-title { display: none; }
+}
+
+/* The chance of cancellation under a verdict badge on the dashboard. */
+.badge-note {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    margin-top: 0.3rem;
 }

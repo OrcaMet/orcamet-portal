@@ -8,7 +8,7 @@ call happens where a failure can be reported to whoever typed the postcode.
 
 from django import forms
 
-from .models import Site, geocode_postcode
+from .models import GeocodingUnavailable, Site, geocode_postcode
 
 
 class GeocodedPostcodeMixin:
@@ -31,7 +31,15 @@ class GeocodedPostcodeMixin:
         if self.instance.pk and (self.instance.postcode or "").strip().upper() == postcode:
             return postcode
 
-        lat, lon = geocode_postcode(postcode)
+        try:
+            lat, lon = geocode_postcode(postcode)
+        except GeocodingUnavailable:
+            # Not the user's fault, and not a verdict on their postcode.
+            raise forms.ValidationError(
+                "We couldn't check that postcode just now — the postcode "
+                "lookup service isn't responding. Please try again in a few "
+                "minutes."
+            )
         if lat is None:
             raise forms.ValidationError(
                 "We couldn't find that UK postcode. Please check it and try again."

@@ -117,7 +117,10 @@ class Site(models.Model):
         if self.latitude is not None and self.longitude is not None:
             return True
 
-        lat, lon = geocode_postcode(self.postcode)
+        try:
+            lat, lon = geocode_postcode(self.postcode)
+        except GeocodingUnavailable:
+            return False
         if lat is None:
             return False
 
@@ -291,11 +294,20 @@ class ChangeLog(models.Model):
 # POSTCODE GEOCODING
 # ============================================================
 
+class GeocodingUnavailable(Exception):
+    """postcodes.io could not be reached or failed; says nothing about the postcode."""
+
+
 def geocode_postcode(postcode: str) -> tuple:
     """
     Convert a UK postcode to lat/lon using postcodes.io (free, no key needed).
 
-    Returns (latitude, longitude) or (None, None) on failure.
+    Returns (latitude, longitude), or (None, None) when postcodes.io says it
+    does not know the postcode. Raises GeocodingUnavailable when the service
+    cannot answer at all — unreachable, timing out, rate limiting or erroring.
+
+    Those two used to share (None, None), so an outage told every user their
+    perfectly good postcode did not exist.
     """
     import requests
 
@@ -304,13 +316,25 @@ def geocode_postcode(postcode: str) -> tuple:
 
     try:
         resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
+    except requests.RequestException as e:
+        raise GeocodingUnavailable(str(e)) from e
+
+    if resp.status_code == 429 or resp.status_code >= 500:
+        raise GeocodingUnavailable(f"postcodes.io returned HTTP {resp.status_code}")
+    if not resp.ok:
+        # 404 is postcodes.io's answer for an unknown postcode; any other
+        # 4xx is about the input too.
+        return (None, None)
+
+    try:
         data = resp.json()
+    except ValueError as e:
+        raise GeocodingUnavailable("postcodes.io returned an unreadable response") from e
 
-        if data.get("status") == 200 and data.get("result"):
-            result = data["result"]
-            return (result["latitude"], result["longitude"])
-    except Exception:
-        pass
+    if not isinstance(data, dict):
+        raise GeocodingUnavailable("postcodes.io returned an unexpected response")
 
+    result = data.get("result")
+    if data.get("status") == 200 and result:
+        return (result["latitude"], result["longitude"])
     return (None, None)
