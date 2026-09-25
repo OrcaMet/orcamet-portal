@@ -16,7 +16,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 
 from .forms import SiteForm
-from .models import ChangeLog, Site, ThresholdProfile
+from .models import ChangeLog, Client, Site, ThresholdProfile
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,28 @@ def _sandbox_client(user):
     if not user.is_sandbox_user:
         raise PermissionDenied("Self-service site management is for trial accounts.")
     return user.client
+
+
+def release_site_name(client, name, keep_pk=None):
+    """
+    Rename any removed site of this client that holds `name`.
+
+    Removal only deactivates a site, but the (client, name) uniqueness
+    constraint still counts it. Suffixing the removed row with its own id
+    frees the name for a new or renamed site while keeping the old row, its
+    forecast history and its ChangeLog intact.
+    """
+    clashes = Site.objects.filter(
+        client=client, name__iexact=name, is_active=False
+    )
+    if keep_pk is not None:
+        clashes = clashes.exclude(pk=keep_pk)
+
+    max_length = Site._meta.get_field("name").max_length
+    for old in clashes:
+        suffix = f" [removed #{old.pk}]"
+        old.name = old.name[: max_length - len(suffix)] + suffix
+        old.save(update_fields=["name"])
 
 
 def _site_allowance(client):
@@ -65,6 +87,22 @@ def site_create(request):
             # immediately, and the runner scores that first forecast against
             # its hardcoded fallback limits instead of the site's own.
             with transaction.atomic():
+                # Lock the client row and count again. The check at the top
+                # of the view is a separate read, so two tabs submitting at
+                # once could both pass it and together exceed the cap. The
+                # lock makes the second wait until the first has committed.
+                Client.objects.select_for_update().filter(pk=client.pk).first()
+                used, cap, may_add = _site_allowance(client)
+                if not may_add:
+                    messages.error(
+                        request,
+                        f"Trial accounts are limited to {cap} active sites. "
+                        f"Remove one to add another.",
+                    )
+                    return redirect("dashboard:home")
+
+                release_site_name(client, form.cleaned_data["name"])
+
                 site = form.save(commit=False)
                 # Set from the session user, never from posted data.
                 site.client = client
@@ -110,13 +148,15 @@ def site_edit(request, site_id):
     if request.method == "POST":
         form = SiteForm(request.POST, instance=site, client=client)
         if form.is_valid():
-            site = form.save()
-            ChangeLog.objects.create(
-                site=site,
-                action=ChangeLog.Action.SITE_UPDATED,
-                user=request.user,
-                details={"changed": sorted(form.changed_data)},
-            )
+            with transaction.atomic():
+                release_site_name(client, form.cleaned_data["name"], keep_pk=site.pk)
+                site = form.save()
+                ChangeLog.objects.create(
+                    site=site,
+                    action=ChangeLog.Action.SITE_UPDATED,
+                    user=request.user,
+                    details={"changed": sorted(form.changed_data)},
+                )
             messages.success(request, f"{site.name} updated.")
             return redirect("dashboard:site_detail", site_id=site.pk)
     else:

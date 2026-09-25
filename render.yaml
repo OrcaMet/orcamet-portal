@@ -69,6 +69,11 @@ services:
   # grew without bound — piggybacking it here avoids paying for a
   # dedicated cron service just to run a cheap delete query.
   #
+  # run_forecasts exits non-zero when any site fails, so a broken run shows
+  # as failed in Render. `;` rather than `&&` so cleanup still runs after a
+  # failed forecast, and the forecast's exit status is what the job reports
+  # (a failing cleanup reports its own).
+  #
   # The live cron job is configured in the Render dashboard; updating this
   # blueprint does not change it. The dashboard command must be changed to
   # match for this to take effect in production.
@@ -80,7 +85,7 @@ services:
     runtime: python
     schedule: "0 */6 * * *"
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python manage.py run_forecasts && python manage.py cleanup_forecasts"
+    startCommand: "python manage.py run_forecasts; status=$?; python manage.py cleanup_forecasts && exit $status"
     envVars:
       - key: DATABASE_URL
         fromDatabase:

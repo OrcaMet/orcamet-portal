@@ -92,10 +92,12 @@ def callback_view(request):
     try:
         token = oauth.auth0.authorize_access_token(request)
     except Exception as e:
+        # The detail goes to the logs only. Exception text from the token
+        # exchange can carry library internals, Auth0 error descriptions and
+        # state mismatches — nothing a visitor can act on, and more than a
+        # login page should hand out.
         logger.error(f"Auth0 token exchange failed: {e}", exc_info=True)
-        return render(request, "accounts/login_error.html", {
-            "error": f"Authentication failed: {e}",
-        })
+        return render(request, "accounts/login_error.html", status=400)
 
     userinfo = token.get("userinfo", {})
 

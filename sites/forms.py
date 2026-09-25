@@ -97,12 +97,19 @@ class SiteForm(GeocodedPostcodeMixin, forms.ModelForm):
 
         `client` is excluded from the form, so Django's own uniqueness check
         cannot run and a duplicate name would surface as an IntegrityError.
+
+        Only active sites count. A removed site is only deactivated, and it
+        used to block its own name forever — with nothing on screen showing
+        the tester which site they "already had". The view renames the
+        removed row out of the way before saving (release_site_name).
         """
         name = (self.cleaned_data.get("name") or "").strip()
         if not name or self.client is None:
             return name
 
-        clash = Site.objects.filter(client=self.client, name__iexact=name)
+        clash = Site.objects.filter(
+            client=self.client, name__iexact=name, is_active=True
+        )
         if self.instance.pk:
             clash = clash.exclude(pk=self.instance.pk)
         if clash.exists():
