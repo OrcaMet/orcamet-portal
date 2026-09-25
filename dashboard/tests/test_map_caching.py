@@ -138,6 +138,33 @@ class FrameCachingTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertNotIn("immutable", r["Cache-Control"])
 
+    def test_a_named_hour_the_run_lacks_is_a_404_not_another_hour(self):
+        """It used to serve the first hour under the requested one."""
+        r = self.client.get(
+            self._addressed(self.contour_url, self.hour + timedelta(hours=5))
+            + "&var=pcancel"
+        )
+
+        self.assertEqual(r.status_code, 404)
+
+    def test_an_unparseable_hour_is_a_404(self):
+        r = self.client.get(
+            "%s?run=%d&var=pcancel&timestamp=not-a-time"
+            % (self.contour_url, self.run.pk)
+        )
+
+        self.assertEqual(r.status_code, 404)
+
+    def test_points_for_an_hour_the_run_lacks_are_not_immutable(self):
+        """An empty answer must not be pinned in the browser for 30 days."""
+        r = self.client.get(
+            self._addressed(self.points_url, self.hour + timedelta(hours=5))
+        )
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["points"], [])
+        self.assertNotIn("immutable", r["Cache-Control"])
+
     # --------------------------------------------------------
     # Revalidation
     # --------------------------------------------------------

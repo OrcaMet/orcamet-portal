@@ -151,19 +151,41 @@ def basemap_url():
 
 def _latest_runs_by_site(sites, success_only=True):
     """
-    Return {site_id: most recent ForecastRun} for the given sites.
+    Return {site_id: the ForecastRun to headline} for the given sites.
 
-    Uses a single query. Callers previously looped over sites issuing one
-    query each, so a client with N sites cost N queries per page load.
+    That is the run for the nearest forecast day from today onward — today's,
+    when there is one — and the newest attempt at that day.
+
+    It used to be simply the newest run by generated_at. But one forecast
+    pass writes today, tomorrow and the day after in that order, so the
+    newest row was always the furthest-out day: the dashboard badge, alert
+    count and map pins all headlined the day after tomorrow's verdict as if
+    it were today's.
+
+    Days in the past are only a fallback, for a site with nothing upcoming.
     """
     runs = ForecastRun.objects.filter(site__in=sites)
     if success_only:
         runs = runs.filter(status=ForecastRun.Status.SUCCESS)
 
+    today = timezone.localdate()
+
     latest = {}
-    # Newest run for each site comes first, so the first one wins.
-    for run in runs.order_by("site_id", "-generated_at"):
+    # Nearest day first, newest attempt at it first, so the first one wins.
+    upcoming = runs.filter(forecast_date__gte=today).order_by(
+        "site_id", "forecast_date", "-generated_at"
+    )
+    for run in upcoming:
         latest.setdefault(run.site_id, run)
+
+    missing = [site for site in sites if site.id not in latest]
+    if missing:
+        past = runs.filter(site__in=missing, forecast_date__lt=today).order_by(
+            "site_id", "-forecast_date", "-generated_at"
+        )
+        for run in past:
+            latest.setdefault(run.site_id, run)
+
     return latest
 
 
@@ -492,17 +514,22 @@ def map_contour_image(request):
     # Identify the frame before fetching it. The PNG is a BLOB on the row,
     # so selecting the whole row to decide whether the client already has it
     # would pull the very bytes a 304 exists to avoid sending.
-    row = None
-    exact = False
-
+    #
+    # A named hour is served exactly or not at all. It used to fall back to
+    # the run's first hour, which put a frame from hours earlier on screen
+    # under the hour the timeline was showing, with nothing to say so. Only a
+    # request that names no hour gets the first one.
     if timestamp:
         parsed = parse_datetime(timestamp)
-        if parsed:
-            row = images.filter(timestamp=parsed).values_list("id", "timestamp").first()
-            exact = row is not None
-
-    if row is None:
+        if parsed is None:
+            raise Http404("Unrecognised timestamp")
+        row = images.filter(timestamp=parsed).values_list("id", "timestamp").first()
+        if row is None:
+            raise Http404("No contour image for that hour")
+        exact = True
+    else:
         row = images.order_by("timestamp").values_list("id", "timestamp").first()
+        exact = False
 
     if row is None:
         raise Http404("No contour image available")
@@ -572,8 +599,13 @@ def map_grid_points_json(request):
 
     # Same reasoning as the contour frames: a run's points are written once,
     # so a fully addressed frame can be revalidated instead of rebuilt.
+    #
+    # Except an hour the run does not have. That returns no points, and was
+    # cached as immutable for 30 days like a real frame — so a browser that
+    # once asked a hair early or late kept an empty tooltip layer for that
+    # hour long after. An empty answer is only ever given the short window.
     etag = _frame_etag("g", run.pk, "points", frame_ts)
-    immutable = pinned_run and parsed is not None
+    immutable = pinned_run and parsed is not None and points_qs.exists()
 
     if request.headers.get("If-None-Match") == etag:
         return _cache_frame(HttpResponseNotModified(), etag, immutable)

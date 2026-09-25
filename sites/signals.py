@@ -10,7 +10,7 @@ import threading
 
 from django.conf import settings
 from django.db import connection, transaction
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
 from sites.models import Site
@@ -109,17 +109,58 @@ def queue_forecast_generation(site_id: int, site_name: str = "") -> bool:
     return True
 
 
+# Fields a forecast actually depends on, or that switch forecasting back on.
+# Name, notes and elevation (which the engine does not read) are not here, so
+# a trial user fixing a typo no longer costs four Open-Meteo calls and a slot
+# on the worker's thread ceiling.
+FORECAST_FIELDS = (
+    "postcode", "latitude", "longitude", "exposure", "is_active", "job_complete",
+)
+
+
+@receiver(pre_save, sender=Site)
+def note_forecast_relevant_change(sender, instance, **kwargs):
+    """
+    Record on the instance whether this save changes anything a forecast
+    depends on, for trigger_forecast_on_site_save to read.
+    """
+    if instance.pk is None:
+        instance._forecast_inputs_changed = True
+        return
+
+    update_fields = kwargs.get("update_fields")
+    fields = FORECAST_FIELDS
+    if update_fields is not None:
+        fields = tuple(f for f in FORECAST_FIELDS if f in update_fields)
+        if not fields:
+            instance._forecast_inputs_changed = False
+            return
+
+    previous = Site.objects.filter(pk=instance.pk).values(*fields).first()
+    instance._forecast_inputs_changed = previous is None or any(
+        previous[f] != getattr(instance, f) for f in fields
+    )
+
+
 @receiver(post_save, sender=Site)
 def trigger_forecast_on_site_save(sender, instance, created, **kwargs):
     """
-    When a site is saved (created or updated), generate forecasts
-    in a background thread so the admin doesn't hang.
+    When a site is created, or updated in a way that changes its forecast,
+    generate forecasts in a background thread so the admin doesn't hang.
+
+    Staff who want a fresh run without changing anything use the admin's
+    "Generate forecasts" action, which calls queue_forecast_generation
+    directly.
     """
     # Only trigger if the site has coordinates and is active.
     # `is None` rather than falsiness — longitude 0.0 is a valid UK location.
     if instance.latitude is None or instance.longitude is None:
         return
     if not instance.is_active or instance.job_complete:
+        return
+    # Default True: a save that bypassed pre_save should still forecast, as
+    # every save did before this check existed.
+    if not created and not getattr(instance, "_forecast_inputs_changed", True):
         return
 
     site_id = instance.pk

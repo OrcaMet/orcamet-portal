@@ -338,6 +338,10 @@ def run_forecasts_all_active():
     """
     Run forecasts for ALL active sites that are not job_complete.
     Used by the cron/management command.
+
+    Returns (runs, errored): every ForecastRun written, and the names of the
+    sites whose run raised rather than recording a failed run — those leave
+    no row behind, so the runs alone would under-count failures.
     """
     from forecasts.locking import site_forecast_lock
 
@@ -346,6 +350,7 @@ def run_forecasts_all_active():
     logger.info(f"Running forecasts for {total} active sites")
 
     all_runs = []
+    errored = []
     skipped = 0
     for idx, site in enumerate(active_sites, 1):
         logger.info(f"[{idx}/{total}] {site.name}")
@@ -362,12 +367,16 @@ def run_forecasts_all_active():
             all_runs.extend(runs)
         except Exception as e:
             logger.error(f"  ✗ Failed for {site.name}: {e}", exc_info=True)
+            errored.append(site.name)
 
     if skipped:
         logger.info(f"{skipped} site(s) skipped — a run was already in progress")
 
     success = sum(1 for r in all_runs if r.status == ForecastRun.Status.SUCCESS)
     failed = sum(1 for r in all_runs if r.status == ForecastRun.Status.FAILED)
-    logger.info(f"Complete: {success} successful, {failed} failed forecast runs")
+    logger.info(
+        f"Complete: {success} successful, {failed} failed forecast runs, "
+        f"{len(errored)} site(s) errored"
+    )
 
-    return all_runs
+    return all_runs, errored
