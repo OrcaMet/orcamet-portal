@@ -48,6 +48,8 @@
         {% endif %}
 
         {% if sites %}
+        {# Scrolls inside its own box on a phone rather than widening the page. #}
+        <div class="table-responsive">
         <table class="data-table">
             <thead>
                 <tr>
@@ -56,7 +58,7 @@
                     <th>Postcode</th>
                     <th>Exposure</th>
                     <th>Status</th>
-                    <th>Latest Risk</th>
+                    <th>Outlook</th>
                 </tr>
             </thead>
             <tbody>
@@ -77,13 +79,23 @@
                         {% with run=site.latest_run %}
                         {% if run.status == "success" %}
                             {% if run.recommendation == "GO" %}
-                                <span class="badge badge-active">GO — {{ run.peak_risk|floatformat:0 }}%</span>
+                                <span class="badge badge-active">GO</span>
                             {% elif run.recommendation == "CAUTION" %}
-                                <span class="badge badge-caution">CAUTION — {{ run.peak_risk|floatformat:0 }}%</span>
+                                <span class="badge badge-caution">CAUTION</span>
                             {% elif run.recommendation == "CANCEL" %}
-                                <span class="badge badge-cancel">CANCEL — {{ run.peak_risk|floatformat:0 }}%</span>
+                                <span class="badge badge-cancel">CANCEL</span>
                             {% else %}
                                 <span class="badge badge-muted">UNKNOWN</span>
+                            {% endif %}
+                            {% comment %}
+                                The chance of cancellation, the same figure the site page
+                                and the map show. This used to print peak_risk beside the
+                                verdict ("CANCEL — 27%"), which reads as a probability but
+                                is the weighted severity score. No figure when the ensemble
+                                was unavailable: a blank must never read as 0%.
+                            {% endcomment %}
+                            {% if run.p_cancel is not None %}
+                                <div class="badge-note">{% widthratio run.p_cancel 1 100 %}% chance of cancellation</div>
                             {% endif %}
                         {% elif run.status == "failed" %}
                             <span class="badge badge-muted">Forecast error</span>
@@ -96,6 +108,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
         {% else %}
         <div class="empty-state">
             <p>No active sites found.</p>

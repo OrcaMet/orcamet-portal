@@ -5,8 +5,14 @@
 
 {% block extra_head %}
 <!-- Chart.js 4 + date-fns adapter — using jsdelivr as recommended by chartjs docs -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+{% comment %}
+   Subresource integrity, as on the map page. chart.umd.js rather than
+   chart.umd.min.js: the .min file is not in the npm package — jsdelivr
+   minifies it on the fly, so its bytes cannot be pinned. chart.umd.js is
+   already minified and is served exactly as published.
+{% endcomment %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" integrity="sha384-dug+JxfBvklEQdJ4AYuBBAIScUz0bVN73xpy273gcAwHjb3qI0fXmuYNaNfdyYJG" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js" integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws" crossorigin="anonymous"></script>
 {% endblock %}
 
 {% block content %}
@@ -164,7 +170,7 @@
                         <th>Gust (m/s)</th>
                         <th>Precip (mm/h)</th>
                         <th>Temp (&deg;C)</th>
-                        <th>Risk</th>
+                        <th>Risk score</th>
                     </tr>
                 </thead>
                 <tbody id="hourly-tbody">
@@ -364,7 +370,8 @@
             data: {
                 labels: labels,
                 datasets: [{
-                    label: 'Risk Score (%)',
+                    // A 0-100 severity index, not a probability: no % sign.
+                    label: 'Risk score (0-100)',
                     data: hourly.map(function(h) { return h.risk; }),
                     borderColor: COLOURS.risk.line,
                     backgroundColor: COLOURS.risk.fill,
@@ -374,7 +381,7 @@
             options: {
                 responsive: true, maintainAspectRatio: false,
                 plugins: { legend: { labels: { color: COLOURS.text } }, tooltip: { mode: 'index', intersect: false } },
-                scales: { x: xScale(useTime), y: yScale('Risk (%)', { max: 100 }) }
+                scales: { x: xScale(useTime), y: yScale('Risk score', { max: 100 }) }
             }
         });
     }
@@ -472,7 +479,7 @@
             html += '<td>' + h.wind_gusts.toFixed(1) + '</td>';
             html += '<td>' + h.precipitation.toFixed(1) + '</td>';
             html += '<td>' + h.temperature.toFixed(1) + '</td>';
-            html += '<td class="' + riskClass + '">' + h.risk.toFixed(0) + '%</td>';
+            html += '<td class="' + riskClass + '">' + h.risk.toFixed(0) + '</td>';
             html += '</tr>';
         }
         tbody.innerHTML = html;

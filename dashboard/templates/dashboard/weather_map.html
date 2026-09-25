@@ -4,9 +4,15 @@
 {% block title %}Weather Map — OrcaMet Portal{% endblock %}
 
 {% block extra_head %}
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+{% comment %}
+   Subresource integrity: the browser refuses any file whose bytes differ
+   from these hashes, so a compromised CDN cannot run code in a logged-in
+   session. Hashes are of the files in the pinned npm packages, which the
+   CDNs serve unchanged; changing a version means recomputing them.
+{% endcomment %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" integrity="sha384-pmjIAcz2bAn0xukfxADbZIb3t8oRT9Sv0rvO+BR5Csr6Dhqq+nZs59P0pPKQJkEV" crossorigin="anonymous" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" integrity="sha384-wgw+aLYNQ7dlhK47ZPK7FRACiq7ROZwgFNg0m04avm4CaXS+Z9Y7nMu8yNjBKYC+" crossorigin="anonymous" />
 <style>
 /* Full-viewport override */
 .main-content { max-width:100%!important; padding:0!important; }
@@ -132,6 +138,12 @@
 
 @media(max-width:768px) {
     .tbar-brand { display:none; }
+    /* The five variable pills plus the wind toggle are wider than a phone.
+       They scroll inside the bar rather than pushing the page sideways. */
+    .tbar-l { min-width:0; flex:1; overflow-x:auto; scrollbar-width:none; }
+    .tbar-l::-webkit-scrollbar { display:none; }
+    .tbar-r { flex-shrink:0; }
+    .pill { padding:0.25rem 0.5rem; }
     .counts { display:none; }
     .grid-status { display:none; }
     .bbar-time { min-width:95px; }
@@ -208,8 +220,8 @@
 {{ basemap_url|json_script:"basemap-url" }}
 {{ map_legend|json_script:"map-legend" }}
 {{ map_colours|json_script:"map-colours" }}
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" integrity="sha384-eXVCORTRlv4FUUgS/xmOyr66XBVraen8ATNLMESp92FKXLAMiKkerixTiBvXriZr" crossorigin="anonymous"></script>
 <script src="{% static 'orcamet_portal/js/field-renderer.js' %}"></script>
 <script>
 (function(){
@@ -755,7 +767,9 @@
         });
     }
 
-    function addUnknownMarkers(ts) {
+    /* Grey "no data" pins for the visible sites, other than those already
+       drawn (skipIds). */
+    function addUnknownMarkers(ts, skipIds) {
         if (!siteGJ || !siteGJ.features) return;
         var when = '';
         var parsed = new Date(ts);
@@ -763,6 +777,7 @@
             when = DATE_FMT.format(parsed) + ' ' + TIME_FMT.format(parsed);
         }
         siteGJ.features.forEach(function(f) {
+            if (skipIds && skipIds[String(f.properties.id)]) return;
             var c = f.geometry.coordinates;
             var p = f.properties;
             var m = L.marker([c[1], c[0]], {icon: mkI('PENDING')});
@@ -798,6 +813,7 @@
             return;
         }
 
+        var drawn = {};
         frame.features.forEach(function(f) {
             var c = f.geometry.coordinates;
             var p = f.properties;
@@ -805,7 +821,30 @@
             var m = L.marker([c[1], c[0]], {icon: mkI(rec)});
             m.bindPopup(popHr(p, ts), {maxWidth: 290, minWidth: 230});
             siteCluster.addLayer(m);
+            drawn[String(p.id)] = true;
         });
+
+        // A frame only holds the sites that have a forecast for this hour.
+        // Every other visible site — a new one awaiting its first run, or
+        // one whose run failed — used to have no pin at all, vanishing from
+        // the map while the header still counted it. Show those as unknown.
+        addUnknownMarkers(ts, drawn);
+    }
+
+    /* The hour to open on: the latest timeline hour at or before now.
+
+       The grid run starts at midnight, so opening on index 0 showed an
+       afternoon visitor weather and pin verdicts from fifteen-odd hours
+       earlier, with the present a long scrub away. Before the timeline
+       starts this is the first hour; after it ends, the last. */
+    function startIndex() {
+        var now = Date.now();
+        var best = 0;
+        for (var i = 0; i < gridTimestamps.length; i++) {
+            var t = Date.parse(gridTimestamps[i]);
+            if (!isNaN(t) && t <= now) best = i;
+        }
+        return best;
     }
 
     function currentTimestamp() {
@@ -1148,7 +1187,7 @@
         document.getElementById('gstatus').textContent = 'Loaded (contour still rendering…)';
         if (gridTimestamps.length) {
             $rng.max = gridTimestamps.length - 1;
-            renderFrame(0);
+            renderFrame(startIndex());
         } else {
             renderSites(null);
         }
@@ -1166,9 +1205,9 @@
 
         if (gridTimestamps.length) {
             $rng.max = gridTimestamps.length - 1;
-            $rng.value = 0;
+            $rng.value = startIndex();
             // One frame of values is all the first paint needs.
-            return fetchGridPoints(gridTimestamps[0]);
+            return fetchGridPoints(gridTimestamps[startIndex()]);
         }
     }).then(function() {
         clearTimeout(bootTimeout);
@@ -1181,7 +1220,7 @@
                 gridTimestamps.length + ' hours loaded';
         }
 
-        renderFrame(0);
+        renderFrame(startIndex());
         fitToSites();
 
         dismissLoading();
