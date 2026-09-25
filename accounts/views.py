@@ -176,6 +176,19 @@ def callback_view(request):
     # Consume any leftover code so a stale invite cannot be reused later.
     request.session.pop(SESSION_KEY, None)
 
+    # A deactivated account must be told so, not logged in. django_login does
+    # not check is_active, but Django's session backend does on the very next
+    # request — so this used to log them in, drop them straight back to
+    # /login/, and Auth0, whose own session was still valid, signed them in
+    # again: an endless redirect loop ending in "too many redirects".
+    if not user.is_active:
+        logger.warning(f"Refusing login for deactivated user {user.username}")
+        return render(request, "accounts/no_access.html", {
+            "email": email,
+            "name": name,
+            "deactivated": True,
+        }, status=403)
+
     # Update name from Auth0 if we don't have it yet
     updated_fields = []
     if name and not user.first_name:

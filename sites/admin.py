@@ -40,11 +40,16 @@ class SiteAdmin(admin.ModelAdmin):
     actions = ["generate_forecasts"]
 
     def latest_risk(self, obj):
-        """Show the latest peak risk in the list view."""
-        from forecasts.models import ForecastRun
-        run = ForecastRun.objects.filter(
-            site=obj, status="success"
-        ).order_by("-forecast_date").first()
+        """
+        Show the headline run's peak risk in the list view.
+
+        Uses the dashboard's own choice of run. This picked the newest
+        forecast_date, which is always the furthest day out — so the admin
+        showed the day after tomorrow as the site's latest risk, the same bug
+        the dashboard had.
+        """
+        from dashboard.views import _latest_runs_by_site
+        run = _latest_runs_by_site([obj]).get(obj.id)
         if run and run.peak_risk is not None:
             emoji = {"GO": "🟢", "CAUTION": "🟡", "CANCEL": "🔴"}.get(run.recommendation, "⚪")
             return f"{emoji} {run.peak_risk:.0f}% {run.recommendation}"

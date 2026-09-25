@@ -13,7 +13,7 @@ from django.db import connection, transaction
 from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 
-from sites.models import Site
+from sites.models import Site, ThresholdProfile
 
 logger = logging.getLogger(__name__)
 
@@ -174,4 +174,37 @@ def trigger_forecast_on_site_save(sender, instance, created, **kwargs):
     # back) — and if it rolls back, claiming the in-flight slot immediately
     # in the signal body would leave the site stuck marked as in-flight
     # forever, since nothing would ever clear it.
+    transaction.on_commit(lambda: queue_forecast_generation(site_id, site_name))
+
+
+@receiver(post_save, sender=ThresholdProfile)
+def trigger_forecast_on_threshold_save(sender, instance, **kwargs):
+    """
+    Re-forecast a site when its active limits change.
+
+    Every stored verdict and chance of cancellation is scored against the
+    limits in force when it was generated. Without this, editing a profile in
+    the admin changed nothing until the next cron run, up to six hours later
+    — while the site page already drew the new limit lines over verdicts
+    scored against the old ones.
+
+    On a brand new site this fires alongside the site's own post_save. The
+    second of the two finds the site's forecast lock held and is skipped, so
+    it still costs one run, not two.
+    """
+    if not instance.is_active:
+        return
+
+    site = instance.site
+    # `is None` rather than falsiness — longitude 0.0 is a valid UK location.
+    if site.latitude is None or site.longitude is None:
+        return
+    if not site.is_active or site.job_complete:
+        return
+
+    site_id = site.pk
+    site_name = site.name
+    logger.info(f"Thresholds saved for {site_name} — queuing forecast generation")
+
+    # After commit, for the same reasons as the site signal above.
     transaction.on_commit(lambda: queue_forecast_generation(site_id, site_name))
