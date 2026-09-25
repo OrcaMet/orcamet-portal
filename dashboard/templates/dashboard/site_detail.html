@@ -239,12 +239,15 @@
 
 {% block extra_scripts %}
 {% if forecast_days %}
+{{ chart_data|json_script:"chart-data" }}
 <script>
 (function() {
     // ============================================================
     // DATA — embedded directly by Django, no AJAX fetch needed
     // ============================================================
-    var CHART_DATA = {{ chart_data_json|safe }};
+    // json_script rather than a |safe dump into the script body: it escapes
+    // <, > and &, so no value can ever close this <script> tag early.
+    var CHART_DATA = JSON.parse(document.getElementById('chart-data').textContent);
 
     var WORK_START = 7;
     var WORK_END = 18;
@@ -295,9 +298,7 @@
 
     if (!data.hourly || data.hourly.length === 0) {
         document.getElementById('hourly-tbody').innerHTML =
-            '<tr><td colspan="6" class="loading-cell">No hourly data available. ' +
-            '(debug: run_ids=' + JSON.stringify(data.debug ? data.debug.run_ids : []) +
-            ', count=' + (data.debug ? data.debug.hourly_count : 'n/a') + ')</td></tr>';
+            '<tr><td colspan="6" class="loading-cell">No hourly data available.</td></tr>';
     } else {
         var thresholds = data.thresholds;
 

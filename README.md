@@ -41,7 +41,7 @@ orcamet-portal/
 ├── forecasts/                # Forecast storage and generation
 │   ├── models.py             # ForecastRun, HourlyForecast, UKRiskGridRun,
 │   │                         #   UKRiskGridPoint, CachedContourImage
-│   ├── engine/               # Your Python forecast scripts (Phase 2)
+│   ├── engine/               # Multi-model ensemble + risk scoring
 │   └── management/commands/  # Django commands for cron jobs
 │
 └── dashboard/                # Client-facing portal views
@@ -122,7 +122,7 @@ orcamet-portal/
    - Note the **Internal Database URL**
 2. Create a **Web Service** pointing to your GitHub repo
    - **Build Command:** `./build.sh`
-   - **Start Command:** `python -m gunicorn orcamet_portal.asgi:application -k uvicorn.workers.UvicornWorker`
+   - **Start Command:** `gunicorn orcamet_portal.wsgi:application` (the same as `render.yaml`)
 3. Add environment variables (see Step 6)
 
 ### Step 6: Configure Environment Variables in Render
@@ -202,14 +202,25 @@ python manage.py runserver
 
 Visit `http://localhost:8000`
 
+### Running the tests
+
+```bash
+python manage.py test
+```
+
+No API keys are needed: the suite patches out Open-Meteo, postcodes.io and
+Auth0. GitHub Actions (`.github/workflows/ci.yml`) runs the same suite
+against Postgres on every pull request and every push to `main`, together
+with `manage.py check` and a check for missing migrations.
+
 ---
 
 ## Phase Roadmap
 
 - [x] **Phase 1:** Django skeleton + Auth0 + Render deployment + database schema
-- [ ] **Phase 2:** Admin panel for adding sites (postcode geocoding), threshold management
-- [ ] **Phase 3:** Forecast engine integration (your Python scripts as Django commands)
-- [ ] **Phase 4:** Client portal views (site forecast heatmaps, text reports)
-- [ ] **Phase 5:** UK risk map generation and display
-- [ ] **Phase 6:** Cron jobs (Render Workflows) for twice-daily forecast updates
+- [x] **Phase 2:** Admin panel for adding sites (postcode geocoding), threshold management
+- [x] **Phase 3:** Forecast engine integration (`run_forecasts`, `risk_grid` commands)
+- [x] **Phase 4:** Client portal views (site forecast charts, hourly breakdown)
+- [x] **Phase 5:** UK risk map generation and display
+- [x] **Phase 6:** Render cron jobs, every 6 hours (site forecasts on the hour, risk grid at :30)
 - [ ] **Phase 7:** ServiceM8 integration for automatic job discovery

@@ -17,7 +17,7 @@ from django.db import transaction
 from django.utils import timezone as dj_timezone
 
 from forecasts.models import ForecastRun, HourlyForecast
-from sites.models import Site, ThresholdProfile
+from sites.models import Site, ThresholdProfile, default_thresholds
 from .core import (
     fetch_ensemble,
     calculate_hourly_risk,
@@ -149,13 +149,7 @@ def run_forecast_for_site(site: Site) -> list:
     else:
         # Use defaults if no threshold profile exists
         logger.warning(f"No active thresholds for {site.name} — using defaults")
-        thresholds = {
-            "wind_mean_caution": 10.0, "wind_mean_cancel": 14.0,
-            "gust_caution": 15.0, "gust_cancel": 20.0,
-            "precip_caution": 0.7, "precip_cancel": 2.0,
-            "temp_min_caution": 1.0, "temp_min_cancel": -2.0,
-            "temp_max_caution": 27.0, "temp_max_cancel": 32.0,
-        }
+        thresholds = default_thresholds()
 
     # Local date, not UTC: a forecast "day" is the working day the crew
     # recognises. Between midnight and 01:00 BST these differ, and a UTC
