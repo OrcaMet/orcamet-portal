@@ -4,14 +4,13 @@ OrcaMet Portal — Dashboard Views
 The main views a logged-in user sees.
 """
 
-import json
 import math
 from datetime import timedelta
 from urllib.parse import quote
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.db.models import Max
+from django.db.models import Max, OuterRef, Subquery
 from django.http import (
     Http404, HttpResponse, HttpResponseNotModified, JsonResponse,
 )
@@ -20,7 +19,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from forecasts.models import ForecastRun, HourlyForecast, UKRiskGridRun, UKRiskGridPoint, CachedContourImage, MapThresholds
-from sites.models import Site, ThresholdProfile
+from sites.models import Site, ThresholdProfile, default_thresholds
 from dashboard.map_colours import colour_ramps
 from dashboard.map_legend import legend_data
 
@@ -180,9 +179,17 @@ def _latest_runs_by_site(sites, success_only=True):
 
     missing = [site for site in sites if site.id not in latest]
     if missing:
-        past = runs.filter(site__in=missing, forecast_date__lt=today).order_by(
-            "site_id", "-forecast_date", "-generated_at"
+        # Only each site's most recent past day. Without the subquery this
+        # pulled every run in the retention window (30 days by default) into
+        # Python to keep one.
+        latest_past_day = (
+            runs.filter(site_id=OuterRef("site_id"), forecast_date__lt=today)
+            .order_by("-forecast_date")
+            .values("forecast_date")[:1]
         )
+        past = runs.filter(
+            site__in=missing, forecast_date=Subquery(latest_past_day)
+        ).order_by("site_id", "-generated_at")
         for run in past:
             latest.setdefault(run.site_id, run)
 
@@ -280,14 +287,16 @@ def site_detail(request, site_id):
     if threshold:
         thresholds_dict = threshold.as_dict()
     else:
-        thresholds_dict = {"wind_mean_caution": 10.0, "wind_mean_cancel": 14.0, "gust_caution": 15.0, "gust_cancel": 20.0, "precip_caution": 0.7, "precip_cancel": 2.0, "temp_min_caution": 1.0, "temp_min_cancel": -2.0, "temp_max_caution": 27.0, "temp_max_cancel": 32.0}
+        thresholds_dict = default_thresholds()
 
     hourly_qs = HourlyForecast.objects.filter(run__in=forecast_days).order_by("timestamp")
-    hourly_list = [{"time": h.timestamp.isoformat(), "risk": h.hourly_risk, "wind_speed": h.wind_speed, "wind_gusts": h.wind_gusts, "precipitation": h.precipitation, "temperature": h.temperature} for h in hourly_qs]
+    # _num on every value: the page now reads this with JSON.parse, which
+    # rejects a bare NaN outright rather than just mis-drawing one point.
+    hourly_list = [{"time": h.timestamp.isoformat(), "risk": _num(h.hourly_risk), "wind_speed": _num(h.wind_speed), "wind_gusts": _num(h.wind_gusts), "precipitation": _num(h.precipitation), "temperature": _num(h.temperature)} for h in hourly_qs]
 
-    chart_data = {"hourly": hourly_list, "thresholds": thresholds_dict, "debug": {"run_ids": [r.id for r in forecast_days], "hourly_count": len(hourly_list)}}
+    chart_data = {"hourly": hourly_list, "thresholds": thresholds_dict}
 
-    context = {"user": user, "site": site, "forecast_days": forecast_days, "today": today, "threshold": threshold, "chart_data_json": json.dumps(chart_data, default=str)}
+    context = {"user": user, "site": site, "forecast_days": forecast_days, "today": today, "threshold": threshold, "chart_data": chart_data}
 
     return render(request, "dashboard/site_detail.html", context)
 

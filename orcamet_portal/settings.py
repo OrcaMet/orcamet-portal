@@ -98,7 +98,11 @@ if not DEBUG:
     # Start with a short HSTS window. Raise to 31536000 (and consider
     # preload) once HTTPS is confirmed working on every hostname served —
     # HSTS is cached by browsers and hard to walk back.
-    SECURE_HSTS_SECONDS = 3600
+    #
+    # Set through DJANGO_HSTS_SECONDS so it can be raised from the Render
+    # dashboard without a code change, and dropped back just as quickly if a
+    # hostname turns out not to be ready.
+    SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", "3600"))
     SECURE_HSTS_INCLUDE_SUBDOMAINS = False
     SECURE_HSTS_PRELOAD = False
 

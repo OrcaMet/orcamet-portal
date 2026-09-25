@@ -101,3 +101,14 @@ class HeadlineRunTests(TestCase):
         yesterday = self._run(-1, "CAUTION")
 
         self.assertEqual(_latest_runs_by_site([self.site])[self.site.id], yesterday)
+
+    def test_past_fallback_only_loads_the_latest_past_day(self, _q):
+        """Older days must not be fetched at all, not just discarded."""
+        for offset in range(-10, -1):
+            self._run(offset, "GO")
+        yesterday = self._run(-1, "CAUTION")
+
+        with self.assertNumQueries(2):
+            latest = _latest_runs_by_site([self.site])
+
+        self.assertEqual(latest[self.site.id], yesterday)

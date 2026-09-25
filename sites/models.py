@@ -244,6 +244,19 @@ class ThresholdProfile(models.Model):
             raise ValidationError(errors)
 
 
+def default_thresholds():
+    """
+    The limits a site is scored against when it has no active profile.
+
+    Read from ThresholdProfile's own field defaults, so these are exactly the
+    limits a newly created site starts with. They used to be copied out as a
+    literal dict in the runner, the risk engine and the site detail view —
+    three copies that would each have needed updating by hand whenever a
+    default changed.
+    """
+    return ThresholdProfile().as_dict()
+
+
 class ChangeLog(models.Model):
     """Audit trail for site and threshold changes."""
 
